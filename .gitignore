@@ -1,0 +1,12 @@
+# Token, workspace labels, ratings and snapshots stay on this PC
+local/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.claude/settings.local.json
+.claude/
+.env
+build/
+dist/
+*.egg-info/

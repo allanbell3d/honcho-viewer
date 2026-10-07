@@ -1,0 +1,109 @@
+<div align="center">
+
+# 🔍 Honcho Viewer
+
+**See what your Honcho memory server really remembers.**
+Explore it, rate it, watch it dream, and compare models or agents side by side.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![Built with PySide6](https://img.shields.io/badge/built%20with-PySide6-41cd52.svg)
+![Read-only](https://img.shields.io/badge/server%20access-read--only-informational.svg)
+
+<br>
+
+<img src="docs/images/compare-peers.png" alt="Compare peers: the same question asked to every agent, answers side by side" width="900">
+
+<sub>Compare peers: ask every agent the same question and read the answers side by side. (Demo data.)</sub>
+
+</div>
+
+> Unofficial community tool, not affiliated with Plastic Labs / [Honcho](https://honcho.dev).
+
+## Why
+
+Honcho builds memory from conversations in the background, which makes it hard to tell whether that memory is
+any good. Honcho Viewer helps you answer:
+
+- 🧠 **What exactly did it conclude about this person, and from which messages?**
+- ✅ **Is it right?** Rate conclusions with one key press and get an accuracy figure.
+- 🌙 **What did a dream add or change?** Take a snapshot before, compare after.
+- ⚖️ **Which model remembers better?** Process the same data with two models and compare the workspaces.
+- 🧑‍🤝‍🧑 **How do my agents differ?** Ask every agent "what do you know about me?" and read the answers side by side.
+
+## Quick start
+
+Requires Python 3.10+.
+
+```
+git clone https://github.com/allanbell3d/honcho-viewer.git
+cd honcho-viewer
+pip install -r requirements.txt
+python HonchoViewer.pyw          # on Windows you can also double-click HonchoViewer.pyw
+```
+
+Type your server address (for example `http://your-server:8000`, without `/docs`), paste a bearer token and
+press **Connect**. Both are remembered on this PC, so you only do this once.
+
+Prefer an installable command? `pip install .` gives you a `honcho-viewer` launcher.
+
+## A tour
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/explore.png" alt="Explore: conclusions with level, rating and details"></td>
+<td width="50%"><img src="docs/images/compare-models.png" alt="Compare models: the same peer across workspaces processed by different models"></td>
+</tr>
+<tr>
+<td align="center"><b>Explore</b><br>every conclusion, rated and traced to its messages</td>
+<td align="center"><b>Compare models</b><br>the same peer across workspaces</td>
+</tr>
+</table>
+
+| Tab | What it does |
+|---|---|
+| **Explore**, Overview | Peer card and representation, optionally one peer's view of another |
+| **Explore**, Conclusions | Every conclusion, split into *from messages* and *from dreaming* (deductive / inductive / contradiction). Rate with keys `1` `2` `3` `0`. See the premises behind a dream conclusion, find supporting messages, and take a Snapshot to see "What changed?" after a dream |
+| **Explore**, Messages | The raw conversation messages |
+| **Explore**, Ask | Honcho's chat ("dialectic") endpoint with every option exposed, tooltips that explain each one, and a live preview of the exact request |
+| **Compare models** | The same peer across several workspaces: counts, peer card, representation, conclusions, and one question asked to all |
+| **Compare peers** | Several peers of one workspace side by side: tick the peers, ask them all the same question |
+
+Both Compare tabs can **Save results** to a dated, self-contained HTML page you can open in any browser.
+More detail in the [user guide](docs/guide.md).
+
+## 🔒 Read-only by design
+
+`src/honcho_viewer/client.py` can only call an allowlist of read routes. Honcho's `POST /v3/workspaces` and
+`POST .../peers` are *get-or-create*, so a typo'd ID would create data; the viewer cannot call them. The one
+call that costs something is **Ask** (it runs your server's LLM), and it only happens when you press the button.
+A test checks that the app never calls a route outside the allowlist.
+
+## 🏠 Your data stays on your PC
+
+Everything the viewer saves lives in a `local/` folder in the project folder (excluded from git). If you installed
+it with `pip`, it uses `~/.honcho-viewer` instead; set `HONCHO_VIEWER_HOME` to put it anywhere else.
+
+| File | Contents |
+|---|---|
+| `local/settings.json` | Server address, **bearer token (plain text)**, workspace labels, window size |
+| `local/ratings.json` | Your correct / wrong / unsure verdicts |
+| `local/snapshots/` | Saved conclusion lists for "What changed?" |
+| `local/comparisons/` | Saved Compare reports. **These contain real memory content, so don't share them.** |
+
+The token is masked in the window but stored unencrypted in `settings.json`; treat that file like a password.
+Memory content can be personal, so check `local/` before you zip or share the app folder.
+
+## Tests
+
+```
+pip install -r requirements.txt pytest
+python -m pytest             # offline: runs the real window against an in-process fake Honcho
+python tools/smoke_test.py   # read-only check against your real server (uses the saved connection)
+python tests/fake_honcho.py  # a fake server on :8765 (token: test-token) to try the app without Honcho
+```
+
+## Contributing and license
+
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and the [changelog](CHANGELOG.md).
+Released under the [MIT License](LICENSE).

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "honcho-viewer"
+dynamic = ["version"]  # single source of truth: src/honcho_viewer/__init__.py
+description = "A read-only desktop viewer for Honcho memory servers: explore, rate, and compare what they remember."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = ["PySide6>=6.6"]
+keywords = ["honcho", "memory", "llm", "viewer", "pyside6"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Environment :: X11 Applications :: Qt",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/allanbell3d/honcho-viewer"
+Issues = "https://github.com/allanbell3d/honcho-viewer/issues"
+Changelog = "https://github.com/allanbell3d/honcho-viewer/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.gui-scripts]
+honcho-viewer = "honcho_viewer.app:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "honcho_viewer.__version__" }  # resolved from src/
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["honcho_viewer*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
