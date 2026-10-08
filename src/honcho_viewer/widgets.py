@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from html import escape
+from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtWidgets import (QComboBox, QLabel, QSizePolicy, QSplitter, QTextBrowser, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QLabel, QSizePolicy, QSplitter, QTextBrowser, QVBoxLayout,
+                               QWidget)
 
 from .async_call import run_async
 from .client import HonchoClient, HonchoError
 from .store import LocalStore
+from .telemetry_hub import TelemetryHub
 
 
 def friendly_error(exc: Exception) -> str:
@@ -31,6 +34,7 @@ class AppContext(QObject):
         self.store = store
         self.client: HonchoClient | None = None
         self.peers_cache: dict[str, list[str]] = {}
+        self.telemetry = TelemetryHub(store)
 
     def call(self, fn: Callable[[HonchoClient], Any], on_done: Callable[[Any], None],
              is_current: Callable[[], bool] = lambda: True,
@@ -51,6 +55,22 @@ class AppContext(QObject):
                 self.status.emit(friendly_error(exc))
 
         run_async(lambda: fn(client), done, failed)
+
+    def pick_save_path(self, parent, title: str, default: Path, name_filter: str, kind: str) -> Path | None:
+        """Ask where to save. Starts at ``default`` (or the folder you last used for this ``kind``); None = cancelled."""
+        last = self.store.ui_value(f"save_dir_{kind}", "")
+        start = Path(last) / default.name if last and Path(last).is_dir() else default
+        chosen, _ = QFileDialog.getSaveFileName(parent, title, str(start), name_filter)
+        if not chosen:
+            return None
+        self.store.set_ui_value(f"save_dir_{kind}", str(Path(chosen).parent))
+        return Path(chosen)
+
+    def pick_open_path(self, parent, title: str, default_folder: Path, name_filter: str, kind: str) -> Path | None:
+        last = self.store.ui_value(f"save_dir_{kind}", "")
+        folder = Path(last) if last and Path(last).is_dir() else default_folder
+        chosen, _ = QFileDialog.getOpenFileName(parent, title, str(folder), name_filter)
+        return Path(chosen) if chosen else None
 
     def ws_title(self, ws: str) -> str:
         label = self.store.label(ws)

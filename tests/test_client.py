@@ -138,3 +138,22 @@ def test_refuses_routes_outside_allowlist_without_network(client, fake):
 
 def test_trailing_slash_in_base_url_is_ignored(fake):
     assert HonchoClient(fake.url + "/", "x").health() == {"status": "ok"}
+
+
+def test_chat_stream_collects_text_evidence_and_first_token_time(fake, client):
+    seen = []
+    resp = client.chat_stream("test-qwen", "alice", {"query": "hi there", "include_evidence": True},
+                              on_text=seen.append)
+
+    assert resp["content"].strip() == "[qwen3-32b] answer to: hi there"
+    assert resp["evidence"]["tool_calls"][0]["tool_name"] == "search_memory"
+    assert 0 <= resp["first_token_s"] < resp["elapsed_s"]  # first words arrive before the stream ends
+    assert len(seen) > 1 and seen[-1] == resp["content"]  # the text grew as chunks arrived
+    assert fake.last("/chat")["body"]["stream"] is True
+
+
+def test_chat_stream_is_still_limited_to_allowlisted_routes(client):
+    import pytest
+
+    with pytest.raises(ValueError):
+        client._prepare("POST", "/v3/workspaces/{ws}/peers", {"ws": "x"})

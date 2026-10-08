@@ -125,3 +125,38 @@ def test_data_dir_can_be_overridden(monkeypatch, tmp_path):
 
     monkeypatch.setenv("HONCHO_VIEWER_HOME", str(tmp_path))
     assert data_dir() == tmp_path
+
+
+def test_snapshots_are_dated_files_and_never_overwrite_each_other(tmp_path):
+    store = LocalStore(tmp_path)
+    store.save_snapshot("ws", "p", [_c("a")])
+    store.save_snapshot("ws", "p", [_c("a"), _c("b")])
+
+    files = sorted((tmp_path / "snapshots").glob("*.json"))
+    assert len(files) == 2
+    assert [c["id"] for c in store.load_snapshot("ws", "p")["conclusions"]] == ["a", "b"]  # newest wins
+
+
+def test_load_snapshot_still_finds_the_old_one_file_per_peer_format(tmp_path):
+    (tmp_path / "snapshots").mkdir()
+    (tmp_path / "snapshots" / "ws__p.json").write_text(
+        '{"taken_at": "2026-10-01T10:00:00", "conclusions": [{"id": "old"}]}', encoding="utf-8")
+
+    assert LocalStore(tmp_path).load_snapshot("ws", "p")["conclusions"][0]["id"] == "old"
+    assert LocalStore(tmp_path).load_snapshot("ws", "someone-else") is None
+
+
+def test_snapshot_of_a_peer_whose_name_continues_another_is_not_mixed_up(tmp_path):
+    store = LocalStore(tmp_path)
+    store.save_snapshot("ws", "x", [_c("short")])
+    store.save_snapshot("ws", "x__y", [_c("long")])
+
+    assert store.load_snapshot("ws", "x")["conclusions"][0]["id"] == "short"
+    assert store.load_snapshot("ws", "x__y")["conclusions"][0]["id"] == "long"
+
+
+def test_read_snapshot_rejects_files_that_are_not_snapshots(tmp_path):
+    junk = tmp_path / "junk.json"
+    junk.write_text('{"hello": 1}', encoding="utf-8")
+    assert LocalStore.read_snapshot(junk) is None
+    assert LocalStore.read_snapshot(tmp_path / "missing.json") is None

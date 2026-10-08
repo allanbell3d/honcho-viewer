@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from html import escape
 
 from .explain import LEVELS
@@ -140,7 +141,7 @@ def diff_html(diff: dict, taken_at: str) -> str:
 
 def comparison_report_html(data: dict, metrics: list[str]) -> str:
     """A standalone page for a saved Compare-tab result; the raw ``data`` is embedded as JSON for reloading."""
-    key = "peers" if "peers" in data else "workspaces"  # what the columns are
+    key = next((k for k in ("peers", "levels") if k in data), "workspaces")  # what the columns are
     wss = list(data[key])
     subject = data.get("peer") or data.get("workspace") or ""
     title = f"Honcho comparison · {subject} · {short_time(data['saved_at'])}"
@@ -156,12 +157,15 @@ def comparison_report_html(data: dict, metrics: list[str]) -> str:
         w = data[key][ws]
         answer = (answer_html(data["question"], w["answer"]) if w.get("answer")
                   else placeholder("No answer saved."))
-        sections.append(
-            f"<h2>{esc(ws)}</h2>{answer}"
-            f"<details><summary>Peer card ({len(w.get('card') or [])} facts)</summary>{card_html(w.get('card'))}</details>"
-            f"<details><summary>Representation</summary>{text_html(w.get('representation'), 'No representation.')}"
-            f"</details><details><summary>Conclusions ({len(w.get('conclusions') or [])})</summary>"
-            f"{conclusions_html(w.get('conclusions') or [], {})}</details>")
+        details = ""
+        if "card" in w:  # tabs that load the peer's data (not the reasoning tab)
+            details = (f"<details><summary>Peer card ({len(w.get('card') or [])} facts)</summary>"
+                       f"{card_html(w.get('card'))}</details>"
+                       f"<details><summary>Representation</summary>"
+                       f"{text_html(w.get('representation'), 'No representation.')}</details>"
+                       f"<details><summary>Conclusions ({len(w.get('conclusions') or [])})</summary>"
+                       f"{conclusions_html(w.get('conclusions') or [], {})}</details>")
+        sections.append(f"<h2>{esc(ws)}</h2>{answer}{details}")
     raw = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{esc(title)}</title>"
             "<style>body{font-family:sans-serif;max-width:1100px;margin:auto;padding:16px}"
@@ -170,6 +174,18 @@ def comparison_report_html(data: dict, metrics: list[str]) -> str:
             f"<h1>{esc(title)}</h1>{question}<table><tr><th></th>{head}</tr>{rows}</table>"
             + "".join(sections)
             + f'<script type="application/json" id="comparison-data">{raw}</script></body></html>')
+
+
+def parse_comparison_html(text: str) -> dict | None:
+    """The data embedded in a page written by ``comparison_report_html``; None if the page has none."""
+    match = re.search(r'<script type="application/json" id="comparison-data">(.*?)</script>', text, re.S)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1))
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def queue_text(status: dict) -> str:

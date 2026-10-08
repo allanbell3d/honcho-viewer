@@ -356,5 +356,332 @@ def test_compare_peers_save_writes_a_report_with_every_peer(window, tmp_path):
     assert data["peers"]["alice"]["answer"]["content"].endswith("answer to: hello?")
 
 
+def _open_reasoning(window, ws="test-qwen", peer="alice"):
+    cr = window.compare_reasoning
+    cr.ws_combo.setCurrentIndex(cr.ws_combo.findData(ws))
+    wait_for(lambda: cr.peer_combo.findText(peer) >= 0)
+    cr.peer_combo.setCurrentText(peer)
+    return cr
+
+
+def _post_dialectic(port, level, tokens, run=None):
+    import json
+    import urllib.request
+
+    event = {"type": "dialectic.completed", "time": "2026-10-08T00:00:00Z", "data": {
+        "run_id": run or f"run-{level}", "workspace_name": "test-qwen", "peer_name": "alice",
+        "reasoning_level": level, "input_tokens": tokens, "output_tokens": tokens // 10,
+        "cache_read_tokens": tokens // 2, "total_duration_ms": 4200.0, "total_iterations": 3,
+        "tool_calls_count": 7, "prefetched_conclusion_count": 5}}
+    child = {"type": "llm.call.completed", "time": "t", "data": {"run_id": event["data"]["run_id"],
+                                                                  "model": "haiku-test"}}
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/", data=json.dumps([child, event]).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    urllib.request.urlopen(req, timeout=5).read()
+
+
+LEVELS = ["minimal", "low", "medium", "high", "max"]
+
+
+def test_reasoning_tab_asks_each_level_in_order_with_streaming_and_time_stats(window, fake):
+    cr = _open_reasoning(window)
+    cr.question.setText("what do you know about me?")
+    cr.ask_btn.click()
+    cr.show_combo.setCurrentText("Stats")
+
+    wait_for(lambda: cr.cell("Answer words", 4) not in ("", "…"))
+    chats = [r["body"] for r in fake.requests if r["path"].endswith("/chat")]
+    assert [b["reasoning_level"] for b in chats] == LEVELS  # one after another, lowest first
+    assert all(b["stream"] is True and b["include_evidence"] is True for b in chats)
+    assert [cr.cell("Reasoning level", i) for i in range(5)] == LEVELS
+    assert float(cr.cell("Wall time (s)", 0)) > 0 and float(cr.cell("First words after (s)", 0)) >= 0
+    assert cr.cell("Tool calls", 0) == "1" and cr.cell("Conclusions read", 0) == "2"
+    assert cr.cell("Input tokens", 0) == "listener off"  # honest about what is missing
+    cr.show_combo.setCurrentText("Answers")
+    assert "answer to: what do you know about me?" in cr.columns.text(2)
+
+
+def test_reasoning_tab_only_asks_the_ticked_levels(window, fake):
+    cr = _open_reasoning(window)
+    cr.set_levels(["low", "high"])
+    cr.question.setText("hi")
+    cr.ask_btn.click()
+    cr.show_combo.setCurrentText("Stats")
+
+    wait_for(lambda: cr.cell("Answer words", 1) not in ("", "…"))
+    assert [r["body"]["reasoning_level"] for r in fake.requests if r["path"].endswith("/chat")] == ["low", "high"]
+
+
+def test_reasoning_tab_fills_token_stats_from_live_telemetry(window):
+    cr = _open_reasoning(window)
+    window.ctx.telemetry.start(0, "")
+    port = window.ctx.telemetry.port
+    cr.set_levels(["low", "high"])
+    cr.question.setText("hi")
+    cr.ask_btn.click()
+    cr.show_combo.setCurrentText("Stats")
+    wait_for(lambda: cr.cell("Answer words", 1) not in ("", "…"))
+    assert cr.cell("Input tokens", 0) == "waiting…"
+
+    _post_dialectic(port, "high", 90000)
+    _post_dialectic(port, "low", 9000)
+
+    wait_for(lambda: cr.cell("Input tokens", 0) == "9,000" and cr.cell("Input tokens", 1) == "90,000")
+    assert (cr.cell("Output tokens", 1), cr.cell("  of which cached", 1)) == ("9,000", "45,000")
+    assert cr.cell("Server time (s)", 0) == "4.2" and cr.cell("Iterations", 0) == "3"
+    assert cr.cell("Tool calls", 0) == "7" and cr.cell("Model(s)", 0) == "haiku-test"
+    window.ctx.telemetry.stop()
+
+
+def test_reasoning_tab_does_not_match_another_levels_event(window):
+    cr = _open_reasoning(window)
+    window.ctx.telemetry.start(0, "")
+    cr.set_levels(["low"])
+    cr.question.setText("hi")
+    cr.ask_btn.click()
+    cr.show_combo.setCurrentText("Stats")
+    wait_for(lambda: cr.cell("Answer words", 0) not in ("", "…"))
+
+    _post_dialectic(window.ctx.telemetry.port, "max", 5000)  # somebody else's call at another level
+
+    wait_for(lambda: window.ctx.telemetry.store.total == 2)
+    assert cr.cell("Input tokens", 0) == "waiting…"
+    window.ctx.telemetry.stop()
+
+
+def test_reasoning_save_writes_stats_and_telemetry(window, tmp_path):
+    import json
+    import re
+
+    cr = _open_reasoning(window)
+    window.ctx.telemetry.start(0, "")
+    cr.set_levels(["low"])
+    cr.question.setText("hi")
+    cr.ask_btn.click()
+    cr.show_combo.setCurrentText("Stats")
+    wait_for(lambda: cr.cell("Answer words", 0) not in ("", "…"))
+    _post_dialectic(window.ctx.telemetry.port, "low", 1234)
+    wait_for(lambda: cr.cell("Input tokens", 0) == "1,234")
+
+    cr.save_btn.click()
+
+    text = next((tmp_path / "comparisons").glob("*.html")).read_text(encoding="utf-8")
+    data = json.loads(re.search(r'<script type="application/json" id="comparison-data">(.*?)</script>',
+                                text, re.S).group(1))
+    col = data["levels"]["low"]
+    assert data["peer"] == "alice" and col["telemetry"]["input_tokens"] == 1234
+    assert col["counts"]["Input tokens"] == "1,234" and "card" not in col
+    assert any(e["type"] == "llm.call.completed" for e in col["run_events"])
+    window.ctx.telemetry.stop()
+
+
+def test_reasoning_tab_listener_buttons_and_copyable_settings(window):
+    cr = window.compare_reasoning
+    assert not window.ctx.telemetry.running and not cr.copy_btn.isEnabled()
+
+    window.ctx.telemetry.start(0, "k3y")
+
+    assert cr.listen_btn.text() == "Stop listening" and cr.copy_btn.isEnabled()
+    text = cr._settings_text()
+    assert "TELEMETRY_ENABLED=true" in text and "TELEMETRY_ENDPOINT=http://" in text and "k3y" in text
+    window.ctx.telemetry.stop()
+    assert cr.listen_btn.text() == "Start listening"
+
+
+def _saved_pages(tmp_path):
+    return sorted((tmp_path / "comparisons").glob("*.html"))
+
+
+def _load_models_tab(window):
+    cmp = window.compare
+    cmp.set_checked(["test-qwen"])
+    wait_for(lambda: cmp.peer_combo.findText("alice") >= 0)
+    cmp.peer_combo.setCurrentText("alice")
+    cmp.load_btn.click()
+    wait_for(lambda: cmp.save_btn.isEnabled())
+    return cmp
+
+
+def _open(tab, path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), "")))
+    tab.open_btn.click()
+
+
+def test_save_results_asks_where_and_remembers_the_folder(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    cmp = _load_models_tab(window)
+    chosen = tmp_path / "elsewhere" / "my-run.html"
+    asked = []
+
+    def fake_dialog(parent, caption, directory, filter=""):
+        asked.append(directory.replace("\\", "/"))
+        return str(chosen), ""
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(fake_dialog))
+
+    cmp.save_btn.click()
+
+    assert chosen.exists() and not _saved_pages(tmp_path)  # went where I chose, not to the default folder
+    assert asked[0].endswith(".html") and "comparisons" in asked[0]
+    cmp.save_btn.click()  # next time the dialog starts in the folder I used
+    assert asked[1].startswith(str(chosen.parent).replace("\\", "/"))
+
+
+def test_save_results_cancel_writes_nothing(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    cmp = _load_models_tab(window)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
+
+    cmp.save_btn.click()
+
+    assert not _saved_pages(tmp_path) and "Not saved" in window.statusBar().currentMessage()
+
+
+def test_open_saved_compare_models_restores_counts_answers_and_views(window, tmp_path, monkeypatch):
+    from honcho_viewer.main_window import MainWindow
+
+    cmp = window.compare
+    cmp.set_checked(["test-qwen", "test-llama"])
+    wait_for(lambda: cmp.peer_combo.findText("alice") >= 0)
+    cmp.peer_combo.setCurrentText("alice")
+    cmp.question.setText("hello?")
+    cmp.ask_btn.click()
+    wait_for(lambda: "answer to: hello?" in cmp.columns.text(0) and "answer to: hello?" in cmp.columns.text(1))
+    cmp.show_combo.setCurrentText("Counts")
+    wait_for(lambda: cmp.cell("Conclusions", 0) == "6" and cmp.cell("Conclusions", 1) == "6")
+    cmp.save_btn.click()
+    page = _saved_pages(tmp_path)[0]
+
+    fresh = MainWindow(LocalStore(tmp_path))  # a new session: nothing loaded yet
+    wait_for(lambda: fresh.workspace_list.count() == 3)
+    _open(fresh.compare, page, monkeypatch)
+
+    again = fresh.compare
+    assert again.counts_table.columnCount() == 2 and again.cell("Conclusions", 1) == "6"
+    assert again.cell("Model / label", 0) == "qwen3-32b" and not again.save_btn.isEnabled()
+    again.show_combo.setCurrentText("Answers")
+    assert "[llama3-70b] answer to: hello?" in again.columns.text(1)
+    again.show_combo.setCurrentText("Representation")
+    assert "llama3-70b representation of alice" in again.columns.text(1)
+    message = fresh.statusBar().currentMessage()
+    assert "Opened" in message and "hello?" in message
+    fresh.close()
+
+
+def test_open_saved_reasoning_restores_stats_and_telemetry(window, tmp_path, monkeypatch):
+    from honcho_viewer.main_window import MainWindow
+
+    cr = _open_reasoning(window)
+    window.ctx.telemetry.start(0, "")
+    cr.set_levels(["low", "high"])
+    cr.question.setText("hi")
+    cr.ask_btn.click()
+    cr.show_combo.setCurrentText("Stats")
+    wait_for(lambda: cr.cell("Answer words", 1) not in ("", "…"))
+    _post_dialectic(window.ctx.telemetry.port, "low", 9000)
+    _post_dialectic(window.ctx.telemetry.port, "high", 90000)
+    wait_for(lambda: cr.cell("Input tokens", 1) == "90,000")
+    cr.save_btn.click()
+    window.ctx.telemetry.stop()
+    page = _saved_pages(tmp_path)[0]
+
+    fresh = MainWindow(LocalStore(tmp_path))
+    wait_for(lambda: fresh.workspace_list.count() == 3)
+    _open(fresh.compare_reasoning, page, monkeypatch)
+
+    again = fresh.compare_reasoning
+    assert [again.cell("Reasoning level", i) for i in range(2)] == ["low", "high"]
+    assert again.cell("Input tokens", 0) == "9,000" and again.cell("Input tokens", 1) == "90,000"
+    assert again.cell("Server time (s)", 1) == "4.2" and again.cell("Model(s)", 0) == "haiku-test"
+    assert again.stats["high"]["telemetry"]["input_tokens"] == 90000 and again.stats["high"]["run_events"]
+    again.show_combo.setCurrentText("Answers")
+    assert "answer to: hi" in again.columns.text(0)
+    fresh.close()
+
+
+def test_open_saved_rejects_the_wrong_kind_and_junk(window, tmp_path, monkeypatch):
+    cmp = _load_models_tab(window)
+    cmp.save_btn.click()
+    models_page = _saved_pages(tmp_path)[0]
+
+    _open(window.compare_peers, models_page, monkeypatch)
+    assert "Compare models" in window.statusBar().currentMessage()
+
+    junk = tmp_path / "junk.html"
+    junk.write_text("<html>nothing</html>", encoding="utf-8")
+    _open(cmp, junk, monkeypatch)
+    assert "not a page saved by Honcho Viewer" in window.statusBar().currentMessage()
+
+
+def test_asking_after_opening_goes_back_to_live_results(window, tmp_path, monkeypatch):
+    cmp = _load_models_tab(window)
+    cmp.save_btn.click()
+    _open(cmp, _saved_pages(tmp_path)[0], monkeypatch)
+    assert not cmp.save_btn.isEnabled()
+
+    cmp.question.setText("again?")
+    cmp.ask_btn.click()
+
+    wait_for(lambda: "answer to: again?" in cmp.columns.text(0))
+    assert cmp.save_btn.isEnabled() and cmp._opened is None
+
+
+def test_snapshot_asks_where_to_save_and_cancel_saves_nothing(on_alice, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    tab = on_alice.peer_view.conclusions
+    target = tmp_path / "mine" / "before-dream.json"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(target), "")))
+    tab.snapshot_btn.click()
+    wait_for(lambda: target.exists())
+    assert not list((tmp_path / "snapshots").glob("*.json"))  # went where I chose
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
+    tab.snapshot_btn.click()
+    wait_for(lambda: "Snapshot not saved" in on_alice.statusBar().currentMessage())
+    assert len(list((tmp_path / "mine").glob("*.json"))) == 1
+
+
+def test_load_snapshot_sets_the_before_for_what_changed(on_alice, tmp_path, monkeypatch):
+    import json
+
+    from PySide6.QtWidgets import QFileDialog
+
+    tab = on_alice.peer_view.conclusions
+    older = tmp_path / "older.json"
+    older.write_text(json.dumps({
+        "workspace": "test-qwen", "peer": "alice", "taken_at": "2026-09-01T10:00:00",
+        "conclusions": [{"id": "gone", "content": "an old conclusion", "observer_id": "alice",
+                         "observed_id": "alice", "level": "explicit"}]}), encoding="utf-8")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(older), "")))
+
+    tab.load_snapshot_btn.click()
+
+    assert "1 conclusions" in tab.snapshot_label.text()
+    tab.diff_btn.click()
+    wait_for(lambda: "an old conclusion" in tab.detail.toPlainText() and "Removed (1)" in tab.detail.toPlainText())
+
+
+def test_load_snapshot_refuses_another_peers_snapshot(on_alice, tmp_path, monkeypatch):
+    import json
+
+    from PySide6.QtWidgets import QFileDialog
+
+    tab = on_alice.peer_view.conclusions
+    other = tmp_path / "other.json"
+    other.write_text(json.dumps({"workspace": "test-qwen", "peer": "agent", "taken_at": "2026-09-01T10:00:00",
+                                 "conclusions": []}), encoding="utf-8")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(other), "")))
+
+    tab.load_snapshot_btn.click()
+
+    assert "select that peer first" in on_alice.statusBar().currentMessage()
+    assert tab.snapshot_label.text() == "No snapshot yet"
+
+
 def test_viewer_never_calls_unknown_routes(on_alice, fake):
     assert fake.unexpected == []

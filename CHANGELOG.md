@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.2 (2026-10-08)
+
+New: **Compare reasoning** tab and a live telemetry listener.
+
+- Ask one peer the same question at several reasoning levels, one after another, with streamed answers, wall time,
+  time to first words and the evidence stats (conclusions/messages read, tool calls).
+- Optional **telemetry listener** (off by default): receives Honcho's CloudEvents (`TELEMETRY_ENDPOINT`), matches each
+  answer to its `dialectic.completed` event and shows input/output/cached tokens, server time, iterations, LLM calls
+  and models. Every event is logged in full to `local/telemetry/` (size-capped, default 1 GB). See `docs/telemetry.md`.
+- **Save results** asks where to save (suggesting the dated default and remembering your last folder), and the three
+  Compare tabs get **Open saved results…**, which loads a saved page back with all its views. Compare reasoning
+  pages include the telemetry (summary and every event behind each run), so tokens and times come back too.
+- **Snapshots** are dated files that are never overwritten (before, each Snapshot replaced the last one), saved
+  through a file dialog, with **Load snapshot…** to choose the "before" for "What changed?". Old one-file snapshots
+  are still found.
+- The listener refuses a port that is already in use (on Windows, two copies of the app could otherwise bind the
+  same port and the first one silently stopped receiving) and can optionally accept posts only from listed sender
+  addresses.
+- Chat client can stream (`chat_stream`). Compare tabs share more code: view and loading hooks in `ComparePanel`,
+  one `WorkspaceMixin` for the workspace/peer pickers.
+
 ## 0.1.1 (2026-10-07), first public release
 
 Everything below 0.1.1 was private development (0.0.1 to 0.0.4) and is kept for the record.

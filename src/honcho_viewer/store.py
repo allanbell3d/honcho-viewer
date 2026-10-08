@@ -2,7 +2,7 @@
 
 settings.json   server URL, token, workspace labels, window state
 ratings.json    your correct/wrong/unsure verdicts on conclusions
-snapshots/      one saved conclusion list per workspace+peer, for before/after diffs
+snapshots/      saved conclusion lists (one dated file each), for before/after diffs
 comparisons/    Compare-tab results saved with "Save results" (one dated HTML report each)
 """
 from __future__ import annotations
@@ -127,31 +127,69 @@ class LocalStore:
         return Accuracy(**counts)
 
     # ---- snapshots -----------------------------------------------------
-    def _snapshot_path(self, ws: str, peer: str) -> Path:
-        return self.root / "snapshots" / f"{quote(ws, safe='')}__{quote(peer, safe='')}.json"
+    # One dated file per snapshot (never overwritten): snapshots/<ws>__<peer>__<YYYYmmdd-HHMMSS>.json.
+    # Files from older versions (snapshots/<ws>__<peer>.json, one per peer) are still found.
+    def _snapshot_prefix(self, ws: str, peer: str) -> str:
+        return f"{quote(ws, safe='')}__{quote(peer, safe='')}"
 
-    def save_snapshot(self, ws: str, peer: str, conclusions: list[dict]) -> str:
+    def snapshot_default_path(self, ws: str, peer: str) -> Path:
+        folder = self.root / "snapshots"
+        stem = f"{self._snapshot_prefix(ws, peer)}__{datetime.now():%Y%m%d-%H%M%S}"
+        path, n = folder / f"{stem}.json", 2
+        while path.exists():
+            path, n = folder / f"{stem}-{n}.json", n + 1
+        return path
+
+    def write_snapshot(self, path: Path, ws: str, peer: str, conclusions: list[dict]) -> str:
         taken_at = _now()
-        _write_json(self._snapshot_path(ws, peer), {"taken_at": taken_at, "conclusions": conclusions})
+        _write_json(Path(path), {"workspace": ws, "peer": peer, "taken_at": taken_at, "conclusions": conclusions})
         return taken_at
 
+    def save_snapshot(self, ws: str, peer: str, conclusions: list[dict]) -> str:
+        return self.write_snapshot(self.snapshot_default_path(ws, peer), ws, peer, conclusions)
+
+    @staticmethod
+    def read_snapshot(path: Path) -> dict | None:
+        """A snapshot file, or None if it isn't one."""
+        data = _read_json(Path(path), None)
+        if isinstance(data, dict) and isinstance(data.get("conclusions"), list) and data.get("taken_at"):
+            return data
+        return None
+
     def load_snapshot(self, ws: str, peer: str) -> dict | None:
-        path = self._snapshot_path(ws, peer)
-        return _read_json(path, None) if path.exists() else None
+        """The newest snapshot of this peer in the default folder."""
+        folder, prefix = self.root / "snapshots", self._snapshot_prefix(ws, peer)
+        best = None
+        for path in [folder / f"{prefix}.json", *folder.glob(f"{prefix}__*.json")]:
+            snap = self.read_snapshot(path) if path.exists() else None
+            if snap is None or snap.get("workspace", ws) != ws or snap.get("peer", peer) != peer:
+                continue
+            if best is None or snap["taken_at"] > best["taken_at"]:
+                best = snap
+        return best
 
     # ---- saved comparisons ----------------------------------------------
-    def save_comparison(self, html: str, peer: str) -> Path:
-        """Write a Compare-tab report to comparisons/<date-time>_<peer>.html; never overwrites an earlier one."""
+    def comparison_default_path(self, subject: str) -> Path:
+        """comparisons/<date-time>_<subject>.html, a name that is not taken yet."""
         folder = self.root / "comparisons"
-        folder.mkdir(parents=True, exist_ok=True)
-        stem = f"{datetime.now():%Y%m%d-%H%M%S}_{quote(peer, safe='')}"
+        stem = f"{datetime.now():%Y%m%d-%H%M%S}_{quote(subject, safe='')}"
         path, n = folder / f"{stem}.html", 2
         while path.exists():
             path, n = folder / f"{stem}-{n}.html", n + 1
+        return path
+
+    @staticmethod
+    def write_comparison(path: Path, html: str) -> Path:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(html, encoding="utf-8")
         os.replace(tmp, path)
         return path
+
+    def save_comparison(self, html: str, subject: str) -> Path:
+        """Write a Compare-tab report to its default place; never overwrites an earlier one."""
+        return self.write_comparison(self.comparison_default_path(subject), html)
 
 
 def diff_conclusions(before: list[dict], after: list[dict]) -> dict:

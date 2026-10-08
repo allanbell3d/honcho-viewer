@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -188,7 +189,13 @@ class FakeHoncho:
                                               "created_at": _ts(0)}],
                                 "tool_calls": [{"tool_name": "search_memory", "tool_input": {"q": "x"}}],
                                 "reasoning_trace_id": None}
-                return 200, {"content": f"[{ws['model']}] answer to: {body.get('query')}", "evidence": evidence}
+                text = f"[{ws['model']}] answer to: {body.get('query')}"
+                if body.get("stream"):  # Honcho's SSE format: delta chunks, then a terminal chunk with evidence
+                    words = text.split(" ")
+                    chunks = [{"delta": {"content": w + " "}, "done": False} for w in words]
+                    chunks.append({"delta": {}, "done": True, "evidence": evidence})
+                    return 200, ("sse", chunks)
+                return 200, {"content": text, "evidence": evidence}
         self.unexpected.append((method, "/".join(seg)))
         return 404, {"detail": "Not Found"}
 
@@ -233,6 +240,15 @@ class _Handler(BaseHTTPRequestHandler):
         fake.requests.append({"method": method, "path": parts.path, "segments": segments,
                               "query": query, "body": body, "auth": auth})
         status, payload = fake.route(method, segments, query, body, auth)
+        if isinstance(payload, tuple) and payload[0] == "sse":
+            self.send_response(status)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for chunk in payload[1]:
+                self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+                self.wfile.flush()
+                time.sleep(0.02)
+            return
         data = json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
