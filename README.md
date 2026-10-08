@@ -70,6 +70,8 @@ Prefer an installable command? `pip install .` gives you a `honcho-viewer` launc
 </tr>
 </table>
 
+<sub>All screenshots use made-up demo data. The times and token counts are illustrative, not benchmarks of Honcho or of any model.</sub>
+
 | Tab | What it does |
 |---|---|
 | **Explore**, Overview | Peer card and representation, optionally one peer's view of another |
