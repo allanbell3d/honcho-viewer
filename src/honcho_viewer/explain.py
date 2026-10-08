@@ -31,6 +31,9 @@ TAB_HINTS = {
     "compare_reasoning": "Ask one peer the same question at several reasoning levels, one after another, and compare "
                          "the answers with time and token stats. Token counts come from Honcho's telemetry: start "
                          "the listener and point Honcho's TELEMETRY_ENDPOINT at it.",
+    "monitor": "Watch what Honcho is doing right now, one row per workspace: extraction, dreaming, questions, model "
+               "calls, problems and queue progress. Rows appear by themselves as events arrive. Start the "
+               "listener and point Honcho's TELEMETRY_ENDPOINT at it.",
 }
 
 ASK_OPTIONS = {

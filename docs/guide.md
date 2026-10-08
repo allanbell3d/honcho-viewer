@@ -65,6 +65,45 @@ Use it to see what each reasoning level costs and how the answers differ for the
    Honcho's `TELEMETRY_ENDPOINT` at it. Setup and troubleshooting are in [telemetry.md](telemetry.md).
    Until the event arrives the cells say `waiting…`, and `listener off` if it isn't running.
 
+## Monitor
+
+Use it to watch many runs at once, for example while a script extracts messages in a dozen workspaces, then dreams,
+then asks questions. It needs the telemetry listener (left panel): press **Start listening** and point Honcho's
+`TELEMETRY_ENDPOINT` at it, as described in [telemetry.md](telemetry.md). Nothing else to set up.
+
+- **Rows appear by themselves** when a workspace sends its first event. **Watch** and **Watch all** add workspaces
+  that haven't sent anything yet, so their queue still shows.
+- **State**: *active* (heard in the last 15 s), *stalled* (work is waiting in the queue but nothing has been heard for
+  longer than **Stalled after**, 3 minutes by default), *done* (the queue is empty) or *idle*. Stalled rows are tinted
+  red and sort to the top. A very long single model call is silent until it finishes, so raise the limit if you see
+  false alarms.
+- **Last event** says how long ago and what it was doing (extracting, dreaming, questions).
+- **Queue** is Honcho's own work queue for the workspace (done / total, running, waiting), polled every 10 seconds
+  with a read-only call. Untick **Poll queue status** to stop polling.
+- **Extraction**, **Dreaming** and **Questions** count batches of messages turned into conclusions, dream runs with the
+  conclusions created (+) and deleted (−), and questions answered. **LLM calls** and **Tokens** add up the model
+  calls. **Problems** lists failed calls, retries, fallbacks to another model, and failed observers or specialists.
+- **Show** filters the table: *Working now* (the default: active, stalled, work waiting or running in its queue, or heard
+  from in the last 10 minutes), *Active*, *Needs attention* (stalled, or any failed call, retry, fallback or failed
+  observer), *Finished* or *Everything*. The box next to it filters by name, and several words separated by commas
+  match any of them (for example `test, prod`). A label says how many of the rows are showing.
+- Select several rows (Ctrl or Shift click) to see them together: a summary per workspace with totals, and one live
+  feed merged from all of them. **Only selected** hides every other row until you click it again.
+- **Drag a column header** to rearrange the columns; the order is remembered. Right-click a header and choose
+  *Reset column order* to go back to the default.
+- Click a column header to sort (numbers sort as numbers). Click a row to see its model calls by purpose, recent
+  problems and a live feed of its events, newest first.
+- **Clear** empties the table. It doesn't touch the log on disk.
+
+Honcho can *sample* its high-volume events (a server setting). If yours does, the call and token totals undercount.
+
+## Rearranging the columns
+
+On the three Compare tabs every column title has a **◀** and a **▶**. Click one to move that column a step to the
+left or right, so any two columns can sit side by side without closing the others. The order applies to every view
+and is kept when you ask again and when you save results (a page you open again keeps its order too). In the
+Monitor, drag a column header instead.
+
 ## Saving a comparison
 
 **Save results** on any Compare tab asks where to save. It suggests `local/comparisons/<date-time>_<name>.html`

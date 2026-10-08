@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
 
+from .monitor import MonitorState
 from .store import LocalStore
 from .telemetry import EventLog, TelemetryReceiver, TelemetryStore, lan_address, parse_allowed
 
@@ -19,7 +20,9 @@ class TelemetryHub(QObject):
         self.store = TelemetryStore()
         cap_mb = store.ui_value("telemetry_cap_mb", 1024)
         self.log = EventLog(store.root / "telemetry", int(cap_mb) * 1024 * 1024)
-        self.receiver = TelemetryReceiver(self.store, self.log, on_events=self.events_received.emit)
+        self.monitor = MonitorState(stall_after=int(store.ui_value("monitor_stall_min", 3)) * 60)
+        self.receiver = TelemetryReceiver(self.store, self.log, on_events=self.events_received.emit,
+                                          on_batch=self.monitor.ingest)
 
     @property
     def running(self) -> bool:

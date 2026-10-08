@@ -68,6 +68,12 @@ Prefer an installable command? `pip install .` gives you a `honcho-viewer` launc
 <td align="center"><b>Compare peers</b><br>one question, every agent</td>
 <td align="center"><b>Compare reasoning</b><br>time and tokens per reasoning level</td>
 </tr>
+<tr>
+<td colspan="2"><img src="docs/images/monitor.png" alt="Monitor: one live row per workspace with state, queue progress, extraction, dreaming, tokens and problems"></td>
+</tr>
+<tr>
+<td colspan="2" align="center"><b>Monitor</b><br>watch many runs live: what each workspace is doing, its queue, tokens, problems, and which ones are stalled</td>
+</tr>
 </table>
 
 <sub>All screenshots use made-up demo data. The times and token counts are illustrative, not benchmarks of Honcho or of any model.</sub>
@@ -81,6 +87,7 @@ Prefer an installable command? `pip install .` gives you a `honcho-viewer` launc
 | **Compare models** | The same peer across several workspaces: counts, peer card, representation, conclusions, and one question asked to all |
 | **Compare peers** | Several peers of one workspace side by side: tick the peers, ask them all the same question |
 | **Compare reasoning** | One peer, the same question at several reasoning levels (`minimal` to `max`), one after another, with time, time to first words and, with live telemetry, real token counts, iterations, tool calls and models. See [live telemetry](docs/telemetry.md) |
+| **Monitor** | A live table with one row per workspace that is doing something: extraction, dreaming and questions, queue progress, model calls, tokens, failed calls and retries, and a **STALLED** flag for a workspace with work waiting that has gone quiet. Rows appear by themselves as Honcho's telemetry arrives. See [live telemetry](docs/telemetry.md) |
 
 All three Compare tabs can **Save results** (you choose where; the default is a dated, self-contained HTML page you
 can open in any browser) and **Open saved results…** to bring a saved page back into the tab with all its views and
@@ -94,7 +101,7 @@ for the "What changed?" comparison. More detail in the [user guide](docs/guide.m
 call that costs something is **Ask** (it runs your server's LLM), and it only happens when you press the button.
 A test checks that the app never calls a route outside the allowlist.
 
-The one thing that listens on the network is the optional **telemetry listener** in Compare reasoning. It is off until
+The one thing that listens on the network is the optional **telemetry listener** (shared by Compare reasoning and Monitor). It is off until
 you press Start, it only *receives* events that Honcho posts (it never calls back or writes to Honcho), and it can be
 protected with a shared secret. Details in [docs/telemetry.md](docs/telemetry.md).
 

@@ -172,8 +172,10 @@ class _ExclusiveServer(ThreadingHTTPServer):
 
 class TelemetryReceiver:
     def __init__(self, store: TelemetryStore, log: EventLog | None = None, key: str = "",
-                 on_events: Callable[[int], None] | None = None, allowed: frozenset[str] = frozenset()):
+                 on_events: Callable[[int], None] | None = None, allowed: frozenset[str] = frozenset(),
+                 on_batch: Callable[[list[dict], float], None] | None = None):
         self.store, self.log, self.key, self.on_events = store, log, key, on_events
+        self.on_batch = on_batch  # called with (events, received_at) from the receiver's thread
         self.allowed = allowed  # sender IPs we accept posts from; empty = anyone who can reach the port
         self.refused = 0
         self.last_error = ""
@@ -244,6 +246,8 @@ class TelemetryReceiver:
             except OSError as exc:  # disk full / folder gone: keep receiving, tell the user
                 self.last_error = f"Cannot write the log: {exc}"
         self.store.add(events, stamp)
+        if self.on_batch:
+            self.on_batch(events, stamp)
         if self.on_events:
             self.on_events(len(events))
 

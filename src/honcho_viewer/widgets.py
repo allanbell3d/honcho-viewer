@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QLabel, QSizePolicy, QSplitter, QTextBrowser, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QSplitter, QTextBrowser,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from .async_call import run_async
 from .client import HonchoClient, HonchoError
@@ -126,12 +126,15 @@ def set_combo_items(combo: QComboBox, items: list[tuple[str, Any]], keep_current
 
 
 class ColumnsView(QWidget):
-    """N side-by-side read-only HTML panes with a title each (one per workspace)."""
+    """N side-by-side read-only HTML panes with a title each. ◀ ▶ on a title move that column one step."""
+
+    move_requested = Signal(int, int)  # (column index, -1 for left / +1 for right)
 
     def __init__(self):
         super().__init__()
         self._splitter = QSplitter(Qt.Horizontal)
         self._views: list[HtmlView] = []
+        self._arrows: list[tuple[QToolButton, QToolButton]] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._splitter)
@@ -140,12 +143,27 @@ class ColumnsView(QWidget):
         for i in reversed(range(self._splitter.count())):
             self._splitter.widget(i).deleteLater()
         self._views = []
-        for title in titles:
+        self._arrows = []
+        for i, title in enumerate(titles):
             box = QWidget()
             col = QVBoxLayout(box)
             col.setContentsMargins(2, 0, 2, 0)
-            head = QLabel(f"<b>{escape(title)}</b>")
-            col.addWidget(head)
+            left, right = QToolButton(), QToolButton()
+            for button, text, delta, tip_text in ((left, "◀", -1, "Move this column to the left"),
+                                                  (right, "▶", 1, "Move this column to the right")):
+                button.setText(text)
+                button.setAutoRaise(True)
+                button.setToolTip(tip_text)
+                button.clicked.connect(lambda _checked=False, i=i, delta=delta: self.move_requested.emit(i, delta))
+            left.setEnabled(i > 0)
+            right.setEnabled(i < len(titles) - 1)
+            self._arrows.append((left, right))
+            head_row = QHBoxLayout()
+            head_row.setContentsMargins(0, 0, 0, 0)
+            head_row.addWidget(left)
+            head_row.addWidget(QLabel(f"<b>{escape(title)}</b>"), 1)
+            head_row.addWidget(right)
+            col.addLayout(head_row)
             view = HtmlView()
             col.addWidget(view)
             self._views.append(view)

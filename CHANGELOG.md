@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.3 (2026-10-08)
+
+New: **Monitor** tab, a live view of many runs at once.
+
+- One row per workspace, filled in dynamically from the telemetry listener: state (active / stalled / idle / done),
+  what it is doing and when it last did anything, Honcho's queue progress (polled read-only every 10 s), extraction
+  batches and conclusions, dream runs with conclusions created and deleted, questions, model calls and tokens, and
+  failed calls, retries, fallbacks and failed observers or specialists.
+- A **STALLED** flag (work waiting but silent for longer than a limit you set, 3 minutes by default) tints the row
+  and sorts it to the top. Click a row for its model calls by purpose, recent problems and a live event feed.
+- **Watch** / **Watch all** add workspaces that haven't sent anything yet; sortable columns; the totals strip shows
+  the fleet at a glance.
+- Compare columns have ◀ ▶ buttons on their titles to move a column one step, so any two can be put side by side
+  without closing the others. The order survives asking again, saving and reopening.
+- Monitor columns can be dragged into any order, which is remembered (right-click a header to reset).
+- Filters: *Working now* (default), *Active*, *Needs attention*, *Finished*, *Everything*, a name filter (comma = or),
+  and multi-select with a combined summary, a merged live feed and **Only selected**.
+- The listener controls are now one shared panel used by Compare reasoning and Monitor.
+
 ## 0.1.2 (2026-10-08)
 
 New: **Compare reasoning** tab and a live telemetry listener.

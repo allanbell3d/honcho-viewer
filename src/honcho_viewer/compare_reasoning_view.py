@@ -9,15 +9,13 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QComboBox, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
-                               QSpinBox, QVBoxLayout)
+from PySide6.QtWidgets import QComboBox, QLabel, QListWidget, QListWidgetItem, QVBoxLayout
 
 from . import explain, render
 from .client import REASONING_LEVELS
 from .compare_panel import Column, ComparePanel, WorkspaceMixin
 from .telemetry import summarize_run
-from .telemetry_hub import DEFAULT_PORT
+from .telemetry_panel import TelemetryPanel
 from .widgets import friendly_error, set_combo_items, tip
 
 WAIT_FOR_TELEMETRY_S = 120
@@ -70,8 +68,6 @@ class CompareReasoningView(WorkspaceMixin, ComparePanel):
         self.evidence.hide()
         self._chunk.connect(self._on_chunk)
         self.ctx.telemetry.events_received.connect(self._on_telemetry)
-        self.ctx.telemetry.state_changed.connect(self._update_listener)
-        self._update_listener()
 
     # ---- selector
     def _build_selector(self, layout: QVBoxLayout) -> None:
@@ -87,26 +83,7 @@ class CompareReasoningView(WorkspaceMixin, ComparePanel):
             self.level_list.addItem(item)
         self.level_list.setMaximumHeight(120)
 
-        self.port_spin = tip(QSpinBox(), "Port the listener waits on. Honcho's TELEMETRY_ENDPOINT must reach it.")
-        self.port_spin.setRange(1, 65535)
-        self.port_spin.setValue(int(self.ctx.store.ui_value("telemetry_port", DEFAULT_PORT)))
-        self.key_edit = tip(QLineEdit(self.ctx.store.ui_value("telemetry_key", ""), placeholderText="optional"),
-                            "Optional shared secret. If set, Honcho must send it in the "
-                            "X-Telemetry-Key header, otherwise the post is rejected.")
-        self.allowed_edit = tip(QLineEdit(self.ctx.store.ui_value("telemetry_allowed", ""),
-                                          placeholderText="anyone (or e.g. 192.168.1.22)"),
-                                "Only accept posts from these sender IP addresses (comma separated), e.g. your "
-                                "Honcho server. Empty = anyone who can reach the port.")
-        self.listen_btn = tip(QPushButton("Start listening"),
-                              "Starts a small listener on this PC that receives Honcho's telemetry. It only "
-                              "receives; it never talks back to Honcho.")
-        self.listen_btn.clicked.connect(self._toggle_listener)
-        self.copy_btn = tip(QPushButton("Copy Honcho settings"), "Copies the TELEMETRY_* lines to paste into "
-                                                               "Honcho's environment.")
-        self.copy_btn.clicked.connect(self._copy_settings)
-        self.listen_status = QLabel()
-        self.listen_status.setWordWrap(True)
-        self.listen_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.telemetry_panel = TelemetryPanel(self.ctx)
 
         layout.addWidget(QLabel("<b>Workspace</b>"))
         layout.addWidget(self.ws_combo)
@@ -115,17 +92,7 @@ class CompareReasoningView(WorkspaceMixin, ComparePanel):
         layout.addWidget(QLabel("<b>Reasoning levels</b>"))
         layout.addWidget(self.level_list)
         layout.addWidget(QLabel("<b>Telemetry (token counts)</b>"))
-        layout.addWidget(self.listen_status)
-        row = QVBoxLayout()
-        row.addWidget(QLabel("Port"))
-        row.addWidget(self.port_spin)
-        row.addWidget(QLabel("Only accept from"))
-        row.addWidget(self.allowed_edit)
-        row.addWidget(QLabel("Secret"))
-        row.addWidget(self.key_edit)
-        layout.addLayout(row)
-        layout.addWidget(self.listen_btn)
-        layout.addWidget(self.copy_btn)
+        layout.addWidget(self.telemetry_panel)
         layout.addStretch(1)
 
     def _clear_peers(self) -> None:
@@ -259,7 +226,6 @@ class CompareReasoningView(WorkspaceMixin, ComparePanel):
     def _on_telemetry(self, _count: int = 0) -> None:
         for col in self._loaded:
             self._match(col)
-        self._update_listener()
         self._refresh()
 
     def _telemetry_cell(self, st: dict, key: str) -> str:
@@ -297,41 +263,3 @@ class CompareReasoningView(WorkspaceMixin, ComparePanel):
             else:
                 cells.append("…" if waiting else _fmt(own.get(name)))
         return cells
-
-    # ---- listener controls
-    def _toggle_listener(self) -> None:
-        hub = self.ctx.telemetry
-        if hub.running:
-            hub.stop()
-            return
-        try:
-            hub.start(self.port_spin.value(), self.key_edit.text(), self.allowed_edit.text())
-        except OSError as exc:
-            self.ctx.status.emit(f"Cannot listen on port {self.port_spin.value()}: {exc}. Try another port.")
-
-    def _settings_text(self) -> str:
-        hub = self.ctx.telemetry
-        lines = ["TELEMETRY_ENABLED=true", f"TELEMETRY_ENDPOINT={hub.url()}"]
-        if hub.key:
-            lines.append('TELEMETRY_HEADERS={"X-Telemetry-Key": "' + hub.key + '"}')
-        return "\n".join(lines)
-
-    def _copy_settings(self) -> None:
-        QGuiApplication.clipboard().setText(self._settings_text())
-        self.ctx.status.emit("Copied. Paste these into Honcho's environment and restart Honcho.")
-
-    def _update_listener(self) -> None:
-        hub = self.ctx.telemetry
-        self.listen_btn.setText("Stop listening" if hub.running else "Start listening")
-        self.port_spin.setEnabled(not hub.running)
-        self.key_edit.setEnabled(not hub.running)
-        self.allowed_edit.setEnabled(not hub.running)
-        self.copy_btn.setEnabled(hub.running)
-        if hub.running:
-            note = f" Cannot write the log: {hub.receiver.last_error}" if hub.receiver.last_error else ""
-            self.listen_status.setText(
-                f"Listening on {hub.url()}<br>{hub.store.total} events received. Everything is logged in "
-                f"local/telemetry/.{note}")
-        else:
-            self.listen_status.setText("Not listening. Start it, then point Honcho's TELEMETRY_ENDPOINT here "
-                                       "to see real token counts.")

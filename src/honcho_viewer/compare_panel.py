@@ -161,8 +161,18 @@ class ComparePanel(QWidget):
         split.setSizes([240, 960])
         QVBoxLayout(self).addWidget(split)
         ctx.labels_changed.connect(self._relabel)
+        self.columns.move_requested.connect(self._move_column)
 
     def _relabel(self) -> None:
+        self._refresh()
+
+    def _move_column(self, index: int, delta: int) -> None:
+        """Swap a column with its neighbour, so any two can be put side by side without closing the others."""
+        target = index + delta
+        if not (0 <= index < len(self._loaded) and 0 <= target < len(self._loaded)):
+            return
+        self._loaded[index], self._loaded[target] = self._loaded[target], self._loaded[index]
+        self._column_titles = []  # forces the columns to be rebuilt in the new order
         self._refresh()
 
     # ---- loading
@@ -201,7 +211,7 @@ class ComparePanel(QWidget):
         if error:
             self.ctx.status.emit(error)
             return
-        if self._columns() != self._loaded:
+        if set(self._columns()) != set(self._loaded):
             self.load()
         if not self._loaded:
             return

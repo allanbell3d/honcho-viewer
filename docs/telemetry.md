@@ -2,13 +2,13 @@
 
 Honcho's chat answer contains only the text (and, if asked, the evidence). The **numbers** (tokens, server time,
 iterations, which models ran) are in Honcho's *telemetry*: a `dialectic.completed` event that the server posts for
-every question. The **Compare reasoning** tab can receive those events live and put them next to each answer.
+every question. The **Compare reasoning** tab can receive those events live and put them next to each answer, and the **Monitor** tab uses them to show every workspace live.
 
 The viewer only *listens*. It never talks back to Honcho and never writes to its database.
 
 ## Setup
 
-1. In the **Compare reasoning** tab press **Start listening**. Choose a port if the default is taken.
+1. In the **Compare reasoning** or **Monitor** tab press **Start listening**. Choose a port if the default is taken.
 2. Press **Copy Honcho settings** and put the lines in Honcho's environment, then restart Honcho:
 
    ```
@@ -29,6 +29,12 @@ Notes:
   below if events don't arrive. **Secret** is a shared key that Honcho sends in the `X-Telemetry-Key` header.
 - Honcho only sends events while `TELEMETRY_ENABLED` is true. Per Honcho's own settings notes, aggregate events such
   as `dialectic.completed` are never sampled, so the totals are reliable.
+
+## One listener, several tabs
+
+The listener is shared. Compare reasoning uses it to match each answer to its event, and the **Monitor** tab uses
+the same events to show every workspace live. Starting or stopping it in one tab starts or stops it for all of them.
+Open the Monitor tab to see all workspaces at once.
 
 ## What is saved
 

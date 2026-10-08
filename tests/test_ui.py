@@ -477,15 +477,15 @@ def test_reasoning_save_writes_stats_and_telemetry(window, tmp_path):
 
 def test_reasoning_tab_listener_buttons_and_copyable_settings(window):
     cr = window.compare_reasoning
-    assert not window.ctx.telemetry.running and not cr.copy_btn.isEnabled()
+    assert not window.ctx.telemetry.running and not cr.telemetry_panel.copy_btn.isEnabled()
 
     window.ctx.telemetry.start(0, "k3y")
 
-    assert cr.listen_btn.text() == "Stop listening" and cr.copy_btn.isEnabled()
-    text = cr._settings_text()
+    assert cr.telemetry_panel.listen_btn.text() == "Stop listening" and cr.telemetry_panel.copy_btn.isEnabled()
+    text = cr.telemetry_panel.settings_text()
     assert "TELEMETRY_ENABLED=true" in text and "TELEMETRY_ENDPOINT=http://" in text and "k3y" in text
     window.ctx.telemetry.stop()
-    assert cr.listen_btn.text() == "Start listening"
+    assert cr.telemetry_panel.listen_btn.text() == "Start listening"
 
 
 def _saved_pages(tmp_path):
@@ -681,6 +681,376 @@ def test_load_snapshot_refuses_another_peers_snapshot(on_alice, tmp_path, monkey
 
     assert "select that peer first" in on_alice.statusBar().currentMessage()
     assert tab.snapshot_label.text() == "No snapshot yet"
+
+
+def _post_events(port, events):
+    import json
+    import urllib.request
+
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/", data=json.dumps(events).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    urllib.request.urlopen(req, timeout=5).read()
+
+
+def _event(kind, ws, **data):
+    return {"type": kind, "time": "t", "data": {"workspace_name": ws, **data}}
+
+
+def _row(tab, ws):
+    from PySide6.QtCore import Qt
+
+    from honcho_viewer.monitor_view import COLUMNS
+
+    for r in range(tab.table.rowCount()):
+        if tab.table.item(r, 0).data(Qt.UserRole) == ws:
+            return {name: tab.table.item(r, c).text() for c, (name, _) in enumerate(COLUMNS)} | {"_row": r}
+    return None
+
+
+def test_monitor_rows_appear_by_themselves_as_events_arrive(window):
+    tab = window.monitor
+    window.ctx.telemetry.start(0, "")
+    port = window.ctx.telemetry.port
+    assert tab.table.rowCount() == 0 and "Nothing yet" in tab.totals_label.text()
+
+    _post_events(port, [
+        _event("representation.completed", "run-a", message_count=12, explicit_conclusion_count=9, observed="p"),
+        _event("llm.call.completed", "run-a", call_purpose="representation", model="haiku",
+               provider_input_tokens=1500, provider_output_tokens=200, outcome="success", attempt=1),
+        _event("dream.specialist", "run-b", specialist_type="deduction", created_observation_count=4,
+               deleted_observation_count=1, success=True),
+        _event("dialectic.completed", "run-c", peer_name="p", reasoning_level="low"),
+    ])
+    tab.refresh()  # the listener has already handed the events over by the time the post returns
+    assert tab.table.rowCount() == 3
+
+    a, b, c = _row(tab, "run-a"), _row(tab, "run-b"), _row(tab, "run-c")
+    assert a["State"] == "● active"
+    assert a["Extraction"].startswith("1 batches · 12 msgs") and a["LLM calls"].startswith("1 ·")
+    assert a["Tokens in / out"] == "1.5k / 200" and a["Model(s)"] == "haiku"
+    assert b["Dreaming"] == "0 runs · +4 −1" and c["Questions"] == "1"
+    assert "<b>3</b> workspaces" in tab.totals_label.text() and "3 active" in tab.totals_label.text()
+    window.ctx.telemetry.stop()
+
+
+def test_monitor_flags_failed_calls_and_shows_them_in_the_detail_pane(window):
+    tab = window.monitor
+    window.ctx.telemetry.start(0, "")
+    _post_events(window.ctx.telemetry.port, [
+        _event("llm.call.completed", "run-a", call_purpose="dream", model="deepseek", provider_input_tokens=10,
+               provider_output_tokens=0, outcome="error", error_class="RateLimitError", attempt=2),
+        _event("dream.run", "run-a", dream_type="omni", observed="p", total_iterations=3),
+    ])
+    tab.refresh()
+
+    row = _row(tab, "run-a")
+    assert "1 failed" in row["Problems"] and "1 retried" in row["Problems"]
+    assert "1 failed calls" in tab.totals_label.text()
+    tab.table.selectRow(row["_row"])
+    assert "RateLimitError" in tab.detail.toPlainText() and "dream" in tab.detail.toPlainText()
+    assert "dream run (omni)" in tab.feed.toPlainText() and "ERROR dream on deepseek" in tab.feed.toPlainText()
+    window.ctx.telemetry.stop()
+
+
+def test_monitor_shows_queue_progress_by_polling_and_flags_a_silent_workspace_as_stalled(window):
+    tab = window.monitor
+    tab.set_workspaces(["test-qwen", "test-llama", "big"])
+    tab.watch_combo.setCurrentIndex(0)
+    tab.watch_btn.click()  # watching needs no telemetry at all
+    wait_for(lambda: _row(tab, "test-qwen") and "2/3" in _row(tab, "test-qwen")["Queue"])
+
+    row = _row(tab, "test-qwen")
+    assert "1 run" in row["Queue"] and "0 wait" in row["Queue"]
+    # the fake server reports work in progress, and nothing has ever been heard from this workspace
+    assert row["State"] == "● STALLED" and "1 stalled" in tab.totals_label.text()
+
+
+def test_monitor_stall_limit_is_saved_and_applied(window, tmp_path):
+    tab = window.monitor
+    tab.stall_spin.setValue(7)
+
+    assert window.ctx.telemetry.monitor.stall_after == 420
+    assert LocalStore(tmp_path).ui_value("monitor_stall_min") == 7
+
+
+def test_monitor_watch_all_and_clear(window):
+    tab = window.monitor
+    tab.set_workspaces(["test-qwen", "test-llama", "big"])
+
+    tab.watch_all_btn.click()
+    assert tab.table.rowCount() == 3
+
+    tab.clear_btn.click()
+    assert tab.table.rowCount() == 0 and "Nothing yet" in tab.totals_label.text()
+
+
+def test_monitor_and_compare_reasoning_share_one_listener(window):
+    window.ctx.telemetry.start(0, "")
+
+    assert window.monitor.panel.listen_btn.text() == "Stop listening"
+    assert window.compare_reasoning.telemetry_panel.listen_btn.text() == "Stop listening"
+    window.ctx.telemetry.stop()
+    assert window.monitor.panel.listen_btn.text() == "Start listening"
+
+
+def _fleet(window):
+    """Four workspaces: one running, one with trouble, two finished long ago."""
+    import time
+
+    tab = window.monitor
+    mon = window.ctx.telemetry.monitor
+    now = time.time()
+    mon.ingest([_event("representation.completed", "demo-run", message_count=5, explicit_conclusion_count=3,
+                       observed="p")], received_at=now - 2)
+    mon.set_queue("demo-run", {"total_work_units": 10, "completed_work_units": 4, "in_progress_work_units": 2,
+                              "pending_work_units": 4})
+    mon.ingest([_event("llm.call.completed", "hk-trouble", call_purpose="dream", model="m", outcome="error",
+                       error_class="Timeout", provider_input_tokens=7, provider_output_tokens=1, attempt=1)],
+               received_at=now - 3000)
+    mon.set_queue("hk-trouble", {"total_work_units": 3, "completed_work_units": 3, "in_progress_work_units": 0,
+                                 "pending_work_units": 0})
+    for name in ("old-a", "old-b"):
+        mon.ingest([_event("dream.run", name, dream_type="x", observed="p")], received_at=now - 5000)
+        mon.set_queue(name, {"total_work_units": 2, "completed_work_units": 2, "in_progress_work_units": 0,
+                             "pending_work_units": 0})
+    tab.poll_check.setChecked(False)
+    tab.refresh()
+    return tab
+
+
+def _visible_names(tab):
+    from PySide6.QtCore import Qt
+
+    return sorted(tab.table.item(r, 0).data(Qt.UserRole) for r in range(tab.table.rowCount())
+                  if not tab.table.isRowHidden(r))
+
+
+def test_monitor_by_default_shows_only_what_is_working_and_says_how_many_are_hidden(window):
+    tab = _fleet(window)
+
+    assert _visible_names(tab) == ["demo-run"]
+    assert tab.count_label.text() == "Showing 1 of 4"
+
+    tab.filter_combo.setCurrentIndex(tab.filter_combo.findData("all"))
+    assert _visible_names(tab) == ["demo-run", "hk-trouble", "old-a", "old-b"]
+    assert tab.count_label.text() == "Showing 4 of 4"
+
+
+def test_monitor_quick_filters_pick_active_attention_and_finished(window):
+    tab = _fleet(window)
+
+    def pick(mode):
+        tab.filter_combo.setCurrentIndex(tab.filter_combo.findData(mode))
+        return _visible_names(tab)
+
+    assert pick("active") == ["demo-run"]
+    assert pick("attention") == ["hk-trouble"]  # the failed call, even though it finished long ago
+    assert pick("done") == ["hk-trouble", "old-a", "old-b"]
+
+
+def test_monitor_name_filter_accepts_several_words_separated_by_commas(window):
+    tab = _fleet(window)
+    tab.filter_combo.setCurrentIndex(tab.filter_combo.findData("all"))
+
+    tab.text_filter.setText("demo, old-b")
+
+    assert _visible_names(tab) == ["demo-run", "old-b"]
+    tab.text_filter.setText("")
+    assert len(_visible_names(tab)) == 4
+
+
+def test_monitor_only_selected_pins_several_rows_and_toggles_back(window):
+    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QItemSelectionModel as Sel
+
+    tab = _fleet(window)
+    tab.filter_combo.setCurrentIndex(tab.filter_combo.findData("all"))
+    for r in range(tab.table.rowCount()):
+        if tab.table.item(r, 0).data(Qt.UserRole) in ("old-a", "hk-trouble"):
+            tab.table.selectionModel().select(tab.table.model().index(r, 0),
+                                              Sel.Select | Sel.Rows)
+    assert sorted(tab.selected_workspaces()) == ["hk-trouble", "old-a"]
+
+    tab.only_selected.setChecked(True)
+    assert _visible_names(tab) == ["hk-trouble", "old-a"]
+
+    tab.only_selected.setChecked(False)
+    assert len(_visible_names(tab)) == 4
+
+
+def test_monitor_only_selected_does_nothing_without_a_selection(window):
+    tab = _fleet(window)
+    tab.only_selected.setChecked(True)
+
+    assert not tab.only_selected.isChecked() and _visible_names(tab) == ["demo-run"]
+
+
+def test_monitor_several_selected_rows_show_a_combined_summary_and_merged_feed(window):
+    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QItemSelectionModel as Sel
+
+    tab = _fleet(window)
+    tab.filter_combo.setCurrentIndex(tab.filter_combo.findData("all"))
+    for r in range(tab.table.rowCount()):
+        if tab.table.item(r, 0).data(Qt.UserRole) in ("demo-run", "hk-trouble"):
+            tab.table.selectionModel().select(tab.table.model().index(r, 0), Sel.Select | Sel.Rows)
+
+    tab.refresh()
+
+    text = tab.detail.toPlainText()
+    assert "2 workspaces selected" in text and "demo-run" in text and "hk-trouble" in text
+    assert "total" in text
+    feed = tab.feed.toPlainText()
+    assert "[demo-run] extraction" in feed and "[hk-trouble] ERROR dream on m" in feed
+    assert feed.index("[demo-run]") < feed.index("[hk-trouble]")  # newest first across workspaces
+
+
+def test_monitor_remembers_the_chosen_filter(window, tmp_path):
+    window.monitor.filter_combo.setCurrentIndex(window.monitor.filter_combo.findData("attention"))
+
+    assert LocalStore(tmp_path).ui_value("monitor_filter") == "attention"
+
+
+def _visual_titles(tab):
+    header = tab.table.horizontalHeader()
+    return [tab.table.horizontalHeaderItem(header.logicalIndex(v)).text() for v in range(header.count())]
+
+
+def test_monitor_columns_can_be_dragged_and_the_order_is_remembered(window, tmp_path):
+    from honcho_viewer.main_window import MainWindow
+
+    tab = window.monitor
+    assert _visual_titles(tab)[:3] == ["Workspace", "State", "Last event"]
+
+    header = tab.table.horizontalHeader()
+    header.moveSection(header.visualIndex(5), 1)  # drag "Dreaming" right after Workspace
+    assert _visual_titles(tab)[:3] == ["Workspace", "Dreaming", "State"]
+
+    fresh = MainWindow(LocalStore(tmp_path))
+    assert _visual_titles(fresh.monitor)[:3] == ["Workspace", "Dreaming", "State"]
+    fresh.close()
+
+
+def test_monitor_data_stays_in_the_right_column_after_rearranging(window):
+    tab = _fleet(window)
+    tab.filter_combo.setCurrentIndex(tab.filter_combo.findData("all"))
+    tab.table.horizontalHeader().moveSection(10, 0)  # put "Model(s)" first
+
+    row = _row(tab, "demo-run")
+
+    assert row["State"] == "● active" and row["Extraction"].startswith("1 batches")
+    assert _visible_names(tab) == ["demo-run", "hk-trouble", "old-a", "old-b"]
+
+
+def test_monitor_reset_column_order_restores_the_default(window, tmp_path):
+    tab = window.monitor
+    tab.table.horizontalHeader().moveSection(3, 0)
+    assert _visual_titles(tab)[0] != "Workspace"
+
+    tab.reset_order()
+
+    assert _visual_titles(tab)[0] == "Workspace" and _visual_titles(tab)[1] == "State"
+    assert LocalStore(tmp_path).ui_value("monitor_columns") == list(range(11))
+
+
+def test_monitor_ignores_a_saved_order_that_no_longer_fits_the_columns(tmp_path, qapp, fake):
+    from honcho_viewer.main_window import MainWindow
+
+    store = LocalStore(tmp_path)
+    store.set_connection(fake.url, TOKEN)
+    store.set_ui_value("monitor_columns", [0, 1, 2])  # e.g. saved by an older version with fewer columns
+
+    win = MainWindow(store)
+
+    assert _visual_titles(win.monitor)[:2] == ["Workspace", "State"]
+    win.close()
+
+
+def _peer_order(cp):
+    return [cp.cell("Peer", i) for i in range(cp.counts_table.columnCount())]
+
+
+def _peers_loaded(window):
+    cp = _open_peers(window)
+    cp.load_btn.click()
+    cp.show_combo.setCurrentText("Counts")
+    wait_for(lambda: cp.counts_table.columnCount() == 3 and cp.cell("Conclusions", 2) not in ("", "…"))
+    return cp
+
+
+def test_columns_can_be_moved_left_and_right_and_edges_are_disabled(window):
+    cp = _peers_loaded(window)
+    before = _peer_order(cp)
+    cp.show_combo.setCurrentText("Answers")
+    first, last = cp.columns._arrows[0], cp.columns._arrows[2]
+    assert not first[0].isEnabled() and first[1].isEnabled()  # the first column cannot go further left
+    assert last[0].isEnabled() and not last[1].isEnabled()
+
+    first[1].click()  # move column 0 one step right
+
+    cp.show_combo.setCurrentText("Counts")
+    assert _peer_order(cp) == [before[1], before[0], before[2]]
+    cp.show_combo.setCurrentText("Answers")
+    cp.columns._arrows[2][0].click()  # and the last one back to the left
+    cp.show_combo.setCurrentText("Counts")
+    assert _peer_order(cp) == [before[1], before[2], before[0]]
+
+
+def test_asking_again_keeps_the_order_i_chose(window):
+    cp = _peers_loaded(window)
+    cp.show_combo.setCurrentText("Answers")
+    cp.columns._arrows[0][1].click()
+    cp.show_combo.setCurrentText("Counts")
+    moved = _peer_order(cp)
+
+    cp.question.setText("again?")
+    cp.ask_btn.click()  # must not look like a new selection and reload everything in the default order
+    wait_for(lambda: all("answer to: again?" in cp.columns.text(i) for i in range(3)))
+
+    cp.show_combo.setCurrentText("Counts")
+    assert _peer_order(cp) == moved
+
+
+def test_a_saved_page_keeps_the_column_order_and_reopens_that_way(window, tmp_path, monkeypatch):
+    import json
+    import re
+
+    from honcho_viewer.main_window import MainWindow
+
+    cp = _peers_loaded(window)
+    before = _peer_order(cp)
+    cp.show_combo.setCurrentText("Answers")
+    cp.columns._arrows[0][1].click()
+    cp.save_btn.click()
+    page = _saved_pages(tmp_path)[0]
+    data = json.loads(re.search(r'<script type="application/json" id="comparison-data">(.*?)</script>',
+                                page.read_text(encoding="utf-8"), re.S).group(1))
+    assert list(data["peers"]) == [before[1], before[0], before[2]]
+
+    fresh = MainWindow(LocalStore(tmp_path))
+    wait_for(lambda: fresh.workspace_list.count() == 3)
+    _open(fresh.compare_peers, page, monkeypatch)
+    assert _peer_order(fresh.compare_peers) == [before[1], before[0], before[2]]
+    fresh.close()
+
+
+def test_moving_columns_works_on_compare_models_and_reasoning_too(window):
+    cmp = _load_models_tab(window)  # one workspace: a single column, so both arrows are off
+    cmp.show_combo.setCurrentText("Answers")
+    assert not any(b.isEnabled() for b in cmp.columns._arrows[0])
+
+    cr = _open_reasoning(window)
+    cr.set_levels(["low", "high"])
+    cr.question.setText("hi")
+    cr.ask_btn.click()
+    cr.show_combo.setCurrentText("Stats")
+    wait_for(lambda: cr.cell("Answer words", 1) not in ("", "…"))
+    cr.show_combo.setCurrentText("Answers")
+    cr.columns._arrows[0][1].click()  # put "high" before "low"
+    cr.show_combo.setCurrentText("Stats")
+
+    assert [cr.cell("Reasoning level", i) for i in range(2)] == ["high", "low"]
+    assert cr.cell("Answer words", 0) not in ("", "…") and cr.cell("Wall time (s)", 1) not in ("", "…")
 
 
 def test_viewer_never_calls_unknown_routes(on_alice, fake):
