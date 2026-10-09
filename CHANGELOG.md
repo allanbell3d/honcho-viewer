@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.3 (2026-10-08)
+## 0.1.3 (2026-10-09)
 
 New: **Monitor** tab, a live view of many runs at once.
 
@@ -18,6 +18,8 @@ New: **Monitor** tab, a live view of many runs at once.
 - Filters: *Working now* (default), *Active*, *Needs attention*, *Finished*, *Everything*, a name filter (comma = or),
   and multi-select with a combined summary, a merged live feed and **Only selected**.
 - The listener controls are now one shared panel used by Compare reasoning and Monitor.
+- Explore, Overview: the *About* drop-down is wider, so long peer names are no longer cut short.
+- Explore, Overview: the *About* drop-down is wider, so long peer names are no longer cut short.
 
 ## 0.1.2 (2026-10-08)
 

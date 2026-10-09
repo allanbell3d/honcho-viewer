@@ -81,6 +81,11 @@ class OverviewTab(_PeerTab):
 
     def set_peer(self, ws: str, peer: str, peers: list[str]) -> None:
         set_combo_items(self.about_combo, _peer_items(peers, "itself", exclude=peer), keep_current=False)
+        # wide enough for the longest peer name (the list used to cut names short, e.g. "Pi-...tor")
+        widest = max(self.about_combo.fontMetrics().horizontalAdvance(self.about_combo.itemText(i))
+                     for i in range(self.about_combo.count()))
+        self.about_combo.view().setMinimumWidth(widest + 40)
+        self.about_combo.setMinimumWidth(int(self.about_combo.sizeHint().width() * 1.5))
         super().set_peer(ws, peer, peers)
 
     def load(self) -> None:
