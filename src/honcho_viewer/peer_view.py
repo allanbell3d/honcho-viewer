@@ -81,6 +81,11 @@ class OverviewTab(_PeerTab):
 
     def set_peer(self, ws: str, peer: str, peers: list[str]) -> None:
         set_combo_items(self.about_combo, _peer_items(peers, "itself", exclude=peer), keep_current=False)
+        # wide enough for the longest peer name (the list used to cut names short, e.g. "Pi-...tor")
+        widest = max(self.about_combo.fontMetrics().horizontalAdvance(self.about_combo.itemText(i))
+                     for i in range(self.about_combo.count()))
+        self.about_combo.view().setMinimumWidth(widest + 40)
+        self.about_combo.setMinimumWidth(int(self.about_combo.sizeHint().width() * 1.5))
         super().set_peer(ws, peer, peers)
 
     def load(self) -> None:
@@ -158,6 +163,10 @@ class ConclusionsTab(_PeerTab):
         self.support_btn.clicked.connect(self._find_support)
         self.snapshot_btn = tip(QPushButton("📸 Snapshot"), explain.SNAPSHOT)
         self.snapshot_btn.clicked.connect(self._snapshot)
+        self.load_snapshot_btn = tip(QPushButton("Load snapshot…"), explain.LOAD_SNAPSHOT)
+        self.load_snapshot_btn.clicked.connect(self._load_snapshot)
+        self._chosen: dict | None = None  # a snapshot saved or loaded just now, for self._chosen_for
+        self._chosen_for: tuple | None = None
         self.diff_btn = tip(QPushButton("What changed?"), explain.SNAPSHOT)
         self.diff_btn.clicked.connect(self._diff)
         self.snapshot_label = QLabel()
@@ -179,6 +188,7 @@ class ConclusionsTab(_PeerTab):
         tools.addWidget(self.support_btn)
         tools.addStretch()
         tools.addWidget(self.snapshot_label)
+        tools.addWidget(self.load_snapshot_btn)
         tools.addWidget(self.snapshot_btn)
         tools.addWidget(self.diff_btn)
         detail_layout.addLayout(tools)
@@ -336,8 +346,16 @@ class ConclusionsTab(_PeerTab):
                       done, self.latest.ticket("support"))
 
     # -- snapshots (before / after dreaming)
+    def _current_snapshot(self) -> dict | None:
+        """The 'before' for What changed?: the one saved/loaded here this session, else the newest saved one."""
+        if not self.ws:
+            return None
+        if self._chosen is not None and self._chosen_for == (self.ws, self.peer):
+            return self._chosen
+        return self.ctx.store.load_snapshot(self.ws, self.peer)
+
     def _update_snapshot_label(self) -> None:
-        snap = self.ctx.store.load_snapshot(self.ws, self.peer) if self.ws else None
+        snap = self._current_snapshot()
         self.snapshot_label.setText(
             f"Snapshot {render.short_time(snap['taken_at'])} · {len(snap['conclusions'])} conclusions"
             if snap else "No snapshot yet")
@@ -348,18 +366,43 @@ class ConclusionsTab(_PeerTab):
         ws, peer = self.ws, self.peer
 
         def done(rows):
-            self.ctx.store.save_snapshot(ws, peer, rows)
+            default = self.ctx.store.snapshot_default_path(ws, peer)
+            path = self.ctx.pick_save_path(self, "Save snapshot", default, "Snapshot (*.json)", "snapshots")
+            if path is None:
+                self.ctx.status.emit("Snapshot not saved.")
+                return
+            self.ctx.store.write_snapshot(path, ws, peer, rows)
+            self._chosen, self._chosen_for = self.ctx.store.read_snapshot(path), (ws, peer)
             self._update_snapshot_label()
-            self.ctx.status.emit(f"Snapshot saved: {len(rows)} conclusions about {peer} in {ws}")
+            self.ctx.status.emit(f"Snapshot saved: {len(rows)} conclusions about {peer} in {ws} -> {path}")
 
         self.ctx.call(lambda c: c.list_conclusions(ws, observer=peer, observed=peer), done,
                       self.latest.ticket("snapshot"))
+
+    def _load_snapshot(self) -> None:
+        if not self.ws:
+            return
+        path = self.ctx.pick_open_path(self, "Load snapshot", self.ctx.store.root / "snapshots",
+                                       "Snapshot (*.json)", "snapshots")
+        if path is None:
+            return
+        snap = self.ctx.store.read_snapshot(path)
+        if snap is None:
+            self.ctx.status.emit(f"{path.name} is not a snapshot file.")
+            return
+        if snap.get("workspace", self.ws) != self.ws or snap.get("peer", self.peer) != self.peer:
+            self.ctx.status.emit(f"That snapshot is of {snap.get('peer')} in {snap.get('workspace')}: select that "
+                                 "peer first.")
+            return
+        self._chosen, self._chosen_for = snap, (self.ws, self.peer)
+        self._update_snapshot_label()
+        self.ctx.status.emit(f"Loaded snapshot {path.name}. 'What changed?' now compares against it.")
 
     def _diff(self) -> None:
         if not self.ws:
             return
         ws, peer = self.ws, self.peer
-        snap = self.ctx.store.load_snapshot(ws, peer)
+        snap = self._current_snapshot()
         if not snap:
             self.detail.setHtml(render.placeholder(
                 "No snapshot yet. Click Snapshot now, then come back after Honcho has dreamed or "

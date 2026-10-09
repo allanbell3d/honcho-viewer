@@ -28,6 +28,12 @@ TAB_HINTS = {
                "what each one built, side by side.",
     "compare_peers": "Pick one workspace and tick several of its peers (agents, users), then ask them all the same "
                      "question, e.g. 'what do you know about me?', and read the answers side by side.",
+    "compare_reasoning": "Ask one peer the same question at several reasoning levels, one after another, and compare "
+                         "the answers with time and token stats. Token counts come from Honcho's telemetry: start "
+                         "the listener and point Honcho's TELEMETRY_ENDPOINT at it.",
+    "monitor": "Watch what Honcho is doing right now, one row per workspace: extraction, dreaming, questions, model "
+               "calls, problems and queue progress. Rows appear by themselves as events arrive. Start the "
+               "listener and point Honcho's TELEMETRY_ENDPOINT at it.",
 }
 
 ASK_OPTIONS = {
@@ -57,7 +63,10 @@ RATINGS = {
     None: "Clear the rating (key 0)",
 }
 
-SNAPSHOT = ("Saves the current list of conclusions on this PC. After Honcho dreams (or processes more "
-            "messages), click 'What changed?' to see what was added or removed.")
+SNAPSHOT = ("Saves the current list of conclusions as a dated file (you choose where; each snapshot is its own "
+            "file, nothing is overwritten). After Honcho dreams (or processes more messages), click "
+            "'What changed?' to see what was added or removed since the snapshot.")
+LOAD_SNAPSHOT = ("Pick an earlier snapshot file of this peer to use as the 'before' for 'What changed?'. Without "
+                 "this, the newest snapshot saved in the default folder is used.")
 SUPPORT = ("Searches the raw messages for text similar to this conclusion, so you can check "
            "whether it was really said.")

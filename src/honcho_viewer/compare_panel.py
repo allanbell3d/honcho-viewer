@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 from typing import NamedTuple
 
 from PySide6.QtCore import Qt
@@ -18,7 +19,7 @@ from . import explain, render
 from .ask import build_chat_body
 from .async_call import Latest
 from .client import REASONING_LEVELS
-from .widgets import AppContext, ColumnsView, hint, tip
+from .widgets import AppContext, ColumnsView, hint, set_combo_items, tip
 
 COMMON_METRICS = (
     ("Conclusions", "All conclusions about this peer."),
@@ -36,9 +37,10 @@ VIEWS = ("Counts", "Peer card", "Representation", "Conclusions", "Answers")
 
 
 class Column(NamedTuple):
-    key: str  # unique within the tab: the workspace id or the peer id
+    key: str  # unique within the tab: the workspace id, the peer id or the reasoning level
     ws: str
     peer: str
+    level: str | None = None  # set only by tabs that vary the reasoning level
 
 
 class ComparePanel(QWidget):
@@ -47,6 +49,11 @@ class ComparePanel(QWidget):
     ASK_PLACEHOLDER = "Ask every column the same question…"
     FIRST_ROW = ("Label", "")  # (row name, tooltip) of the first Counts row
     REPORT_KEY = "workspaces"  # key holding the per-column data in a saved report
+    VIEWS = VIEWS
+    TABLE_VIEW = "Counts"  # which entry of VIEWS shows the table instead of columns
+    METRICS = COMMON_METRICS  # rows after FIRST_ROW in the table
+    LOADS_DETAILS = True  # fetch card / representation / conclusions / queue for every column
+    HAS_REASONING = True  # show the single reasoning-level picker next to the question
 
     def _build_selector(self, layout: QVBoxLayout) -> None:
         """Add the selection widgets (and ``self.load_btn``) to the left-hand column."""
@@ -69,6 +76,9 @@ class ComparePanel(QWidget):
     def _report_subject(self) -> str:
         return "comparison"
 
+    def _report_column_extra(self, col: Column) -> dict:
+        return {}
+
     # ---- construction
     def __init__(self, ctx: AppContext):
         super().__init__()
@@ -80,16 +90,21 @@ class ComparePanel(QWidget):
         self._asked: dict | None = None
         self._loaded: list[Column] = []
         self._column_titles: list[str] = []
-        self.metrics = [self.FIRST_ROW] + list(COMMON_METRICS)
+        self._opened: dict | None = None  # a saved report shown instead of live data
+        self.metrics = [self.FIRST_ROW] + list(self.METRICS)
 
         self.show_combo = tip(QComboBox(), "What to put side by side.")
-        self.show_combo.addItems(VIEWS)
+        self.show_combo.addItems(self.VIEWS)
         self.show_combo.currentTextChanged.connect(self._refresh)
         self.save_btn = tip(QPushButton("Save results"),
                             "Save everything loaded here (counts, answers, peer cards, representations, conclusions) "
                             "as a dated page in local\\comparisons, so you can compare with it later.")
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self.save_results)
+        self.open_btn = tip(QPushButton("Open saved results…"),
+                            "Show a page you saved earlier with Save results, exactly as it was: counts or stats, "
+                            "answers, telemetry and everything else it contains. Works without a server connection.")
+        self.open_btn.clicked.connect(self.open_saved)
         self.counts_table = QTableWidget(len(self.metrics), 0)
         self.counts_table.setVerticalHeaderLabels([m for m, _ in self.metrics])
         for row, (_, why) in enumerate(self.metrics):
@@ -121,11 +136,16 @@ class ComparePanel(QWidget):
         top.addWidget(QLabel("Show:"))
         top.addWidget(self.show_combo)
         top.addStretch()
+        top.addWidget(self.open_btn)
         top.addWidget(self.save_btn)
         ask_row = QHBoxLayout()
         ask_row.addWidget(self.question, 1)
-        ask_row.addWidget(tip(QLabel("reasoning"), explain.ASK_OPTIONS["reasoning_level"]))
+        self.reasoning_label = tip(QLabel("reasoning"), explain.ASK_OPTIONS["reasoning_level"])
+        ask_row.addWidget(self.reasoning_label)
         ask_row.addWidget(self.reasoning)
+        if not self.HAS_REASONING:
+            self.reasoning_label.hide()
+            self.reasoning.hide()
         ask_row.addWidget(self.evidence)
         ask_row.addWidget(self.ask_btn)
         right = QWidget()
@@ -141,8 +161,18 @@ class ComparePanel(QWidget):
         split.setSizes([240, 960])
         QVBoxLayout(self).addWidget(split)
         ctx.labels_changed.connect(self._relabel)
+        self.columns.move_requested.connect(self._move_column)
 
     def _relabel(self) -> None:
+        self._refresh()
+
+    def _move_column(self, index: int, delta: int) -> None:
+        """Swap a column with its neighbour, so any two can be put side by side without closing the others."""
+        target = index + delta
+        if not (0 <= index < len(self._loaded) and 0 <= target < len(self._loaded)):
+            return
+        self._loaded[index], self._loaded[target] = self._loaded[target], self._loaded[index]
+        self._column_titles = []  # forces the columns to be rebuilt in the new order
         self._refresh()
 
     # ---- loading
@@ -152,10 +182,14 @@ class ComparePanel(QWidget):
             self.ctx.status.emit("Pick what to compare first (tick at least one item).")
             return
         self._loaded = cols
+        self._opened = None
         self.results, self.answers, self.answer_data, self._asked = {}, {}, {}, None
         self.save_btn.setEnabled(True)
         self.latest.ticket("ask")  # answers for the previous selection are no longer wanted
         ok = self.latest.ticket("load")
+        if not self.LOADS_DETAILS:
+            self._refresh()
+            return
 
         def gather(client, col):
             # observer == observed: the peer's own view (other observers keep duplicate copies)
@@ -177,26 +211,36 @@ class ComparePanel(QWidget):
         if error:
             self.ctx.status.emit(error)
             return
-        if self._columns() != self._loaded:
+        if set(self._columns()) != set(self._loaded):
             self.load()
         if not self._loaded:
             return
         ok = self.latest.ticket("ask")  # a newer ask or load supersedes this one
-        header = f"reasoning {body['reasoning_level']}"
-        self._asked = {"question": body["query"], "reasoning": body["reasoning_level"]}
+        self._opened = None  # live results replace any saved page being shown
+        self.save_btn.setEnabled(True)
+        self._asked = {"question": body["query"], "reasoning": self._asked_reasoning(body)}
         self.answer_data = {}
+        self._start_asks(body, ok)
+        self.show_combo.setCurrentText("Answers")
+        self._refresh()
 
-        def answered(col, resp):
-            self.answers[col.key] = render.answer_html(body["query"], resp, header)
-            self.answer_data[col.key] = resp
-            self._refresh()
+    def _asked_reasoning(self, body: dict) -> str:
+        return body["reasoning_level"]
 
+    def _answer_header(self, col: Column, body: dict) -> str:
+        return f"reasoning {body['reasoning_level']}"
+
+    def _set_answer(self, col: Column, body: dict, resp: dict) -> None:
+        self.answers[col.key] = render.answer_html(body["query"], resp, self._answer_header(col, body))
+        self.answer_data[col.key] = resp
+        self._refresh()
+
+    def _start_asks(self, body: dict, ok) -> None:
+        """Send the question to every column at once. Tabs that need another order override this."""
         for col in self._loaded:
             self.answers[col.key] = render.placeholder("Honcho is thinking…")
             self.ctx.call(lambda c, col=col: c.chat(col.ws, col.peer, body),
-                          lambda r, col=col: answered(col, r), ok)
-        self.show_combo.setCurrentText("Answers")
-        self._refresh()
+                          lambda r, col=col: self._set_answer(col, body, r), ok)
 
     # ---- saving
     def save_results(self) -> None:
@@ -206,18 +250,84 @@ class ComparePanel(QWidget):
                 self.REPORT_KEY: {}}
         for col in self._loaded:
             r = self.results.get(col.key) or {}
-            data[self.REPORT_KEY][col.key] = {
-                "label": self.ctx.store.label(col.ws), "workspace": col.ws, "peer": col.peer,
-                "counts": dict(zip(names, self._counts(col))), "answer": self.answer_data.get(col.key),
-                "card": r.get("card"), "representation": r.get("rep"), "conclusions": r.get("conclusions") or []}
-        path = self.ctx.store.save_comparison(render.comparison_report_html(data, names), self._report_subject())
+            entry = {"label": self.ctx.store.label(col.ws), "workspace": col.ws, "peer": col.peer,
+                     "counts": dict(zip(names, self._counts(col))), "answer": self.answer_data.get(col.key)}
+            if self.LOADS_DETAILS:
+                entry.update(card=r.get("card"), representation=r.get("rep"), conclusions=r.get("conclusions") or [])
+            data[self.REPORT_KEY][col.key] = {**entry, **self._report_column_extra(col)}
+        default = self.ctx.store.comparison_default_path(self._report_subject())
+        path = self.ctx.pick_save_path(self, "Save results", default, "Saved comparison (*.html)", "comparisons")
+        if path is None:
+            self.ctx.status.emit("Not saved.")
+            return
+        try:
+            self.ctx.store.write_comparison(path, render.comparison_report_html(data, names))
+        except OSError as exc:
+            self.ctx.status.emit(f"Could not save to {path}: {exc}")
+            return
         missing = [c.key for c in self._loaded
-                   if c.key not in self.results or (self._asked and c.key not in self.answer_data)]
+                   if (self.LOADS_DETAILS and c.key not in self.results)
+                   or (self._asked and c.key not in self.answer_data)]
         note = f" (still loading: {', '.join(missing)})" if missing else ""
         self.ctx.status.emit(f"Saved to {path}{note}")
 
+    # ---- opening a saved page
+    def open_saved(self) -> None:
+        path = self.ctx.pick_open_path(self, "Open saved results", self.ctx.store.root / "comparisons",
+                                       "Saved comparison (*.html)", "comparisons")
+        if path is None:
+            return
+        try:
+            data = render.parse_comparison_html(Path(path).read_text(encoding="utf-8"))
+        except (OSError, UnicodeError) as exc:
+            self.ctx.status.emit(f"Could not read {path}: {exc}")
+            return
+        if data is None:
+            self.ctx.status.emit(f"{Path(path).name} is not a page saved by Honcho Viewer (no data inside).")
+            return
+        if self.REPORT_KEY not in data:
+            kinds = {"workspaces": "Compare models", "peers": "Compare peers", "levels": "Compare reasoning"}
+            kind = next((name for key, name in kinds.items() if key in data), "another kind of")
+            self.ctx.status.emit(f"{Path(path).name} was saved from {kind}: open it in that tab.")
+            return
+        self._apply_saved(data, Path(path).name)
+
+    def _apply_saved(self, data: dict, name: str) -> None:
+        self.latest.ticket("ask")  # drop replies still on their way for the previous contents
+        self.latest.ticket("load")
+        entries = data[self.REPORT_KEY]
+        question = data.get("question") or ""
+        self._opened = data
+        self._loaded = [Column(key, e.get("workspace") or "", e.get("peer") or "", e.get("level"))
+                        for key, e in entries.items()]
+        self.results, self.answers, self.answer_data = {}, {}, {}
+        for col in self._loaded:
+            e = entries[col.key]
+            self.results[col.key] = {"conclusions": e.get("conclusions") or [], "card": e.get("card") or [],
+                                     "rep": e.get("representation") or "", "queue": {}}
+            if e.get("answer"):
+                self.answer_data[col.key] = e["answer"]
+                header = self._answer_header(col, {"reasoning_level": data.get("reasoning")})
+                self.answers[col.key] = render.answer_html(question, e["answer"], header)
+        self._asked = {"question": question, "reasoning": data.get("reasoning")} if question else None
+        self._restore_saved(data)
+        self.save_btn.setEnabled(False)
+        self.show_combo.setCurrentText(self.TABLE_VIEW)
+        self._refresh()
+        self.ctx.status.emit(f"Opened {name}, saved {render.short_time(data.get('saved_at', ''))}"
+                             + (f" · question: {question}" if question else ""))
+
+    def _restore_saved(self, data: dict) -> None:
+        """Hook for tabs that keep more state than the columns (the reasoning tab restores its telemetry)."""
+
     # ---- display
     def _counts(self, col: Column) -> list[str]:
+        if self._opened is not None:  # a saved page: show its numbers as they were
+            saved = (self._opened[self.REPORT_KEY].get(col.key) or {}).get("counts", {})
+            return [str(saved.get(name, "")) for name, _ in self.metrics]
+        return self._live_counts(col)
+
+    def _live_counts(self, col: Column) -> list[str]:
         first = self._first_cell(col)
         r = self.results.get(col.key)
         if r is None:
@@ -245,7 +355,7 @@ class ComparePanel(QWidget):
 
     def _refresh(self, *_args) -> None:
         view = self.show_combo.currentText()
-        if view == "Counts":
+        if view == self.TABLE_VIEW:
             self.stack.setCurrentWidget(self.counts_table)
             self.counts_table.setColumnCount(len(self._loaded))
             self.counts_table.setHorizontalHeaderLabels([c.key for c in self._loaded])
@@ -266,3 +376,57 @@ class ComparePanel(QWidget):
         row = [m for m, _ in self.metrics].index(metric)
         item = self.counts_table.item(row, column)
         return item.text() if item else ""
+
+
+class WorkspaceMixin:
+    """A workspace dropdown that loads the chosen workspace's peers. For tabs that compare within ONE workspace.
+
+    The tab calls ``_make_workspace_combo()`` while building its selector and provides ``_clear_peers()`` and
+    ``_fill_peers(ids)`` to show the peers however it likes (a checklist, a dropdown, ...).
+    """
+
+    UI_KEY = "peers_workspace"  # remembered between runs
+
+    def _make_workspace_combo(self) -> QComboBox:
+        self.ws_combo = tip(QComboBox(), "The workspace whose peers you want to compare.")
+        self.ws_combo.currentIndexChanged.connect(self._on_workspace)
+        return self.ws_combo
+
+    def _clear_peers(self) -> None:
+        raise NotImplementedError
+
+    def _fill_peers(self, ids: list[str]) -> None:
+        raise NotImplementedError
+
+    def set_workspaces(self, ids: list[str]) -> None:
+        wanted = self.ws_combo.currentData() or self.ctx.store.ui_value(self.UI_KEY)
+        set_combo_items(self.ws_combo, [(self.ctx.ws_title(ws), ws) for ws in ids], keep_current=False)
+        index = self.ws_combo.findData(wanted)
+        self.ws_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._on_workspace()
+
+    def _on_workspace(self, *_args) -> None:
+        ws = self.ws_combo.currentData()
+        self._clear_peers()
+        if not ws:
+            return
+        self.ctx.store.set_ui_value(self.UI_KEY, ws)
+        if ws in self.ctx.peers_cache:
+            self._show_peers(ws, self.ctx.peers_cache[ws])
+            return
+        self.ctx.call(lambda c: [p["id"] for p in c.list_peers(ws)],
+                      lambda ids: self._cache_then_show(ws, ids), self.latest.ticket("peers"))
+
+    def _cache_then_show(self, ws: str, ids: list[str]) -> None:
+        self.ctx.peers_cache[ws] = ids
+        self._show_peers(ws, ids)
+
+    def _show_peers(self, ws: str, ids: list[str]) -> None:
+        if ws == self.ws_combo.currentData():  # ignore a late reply for a workspace we already left
+            self._fill_peers(sorted(ids))
+
+    def _relabel_workspaces(self) -> None:
+        self.ws_combo.blockSignals(True)
+        for i in range(self.ws_combo.count()):
+            self.ws_combo.setItemText(i, self.ctx.ws_title(self.ws_combo.itemData(i)))
+        self.ws_combo.blockSignals(False)

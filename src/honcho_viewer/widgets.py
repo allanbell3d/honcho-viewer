@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from html import escape
+from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtWidgets import (QComboBox, QLabel, QSizePolicy, QSplitter, QTextBrowser, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QSplitter, QTextBrowser,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from .async_call import run_async
 from .client import HonchoClient, HonchoError
 from .store import LocalStore
+from .telemetry_hub import TelemetryHub
 
 
 def friendly_error(exc: Exception) -> str:
@@ -31,6 +34,7 @@ class AppContext(QObject):
         self.store = store
         self.client: HonchoClient | None = None
         self.peers_cache: dict[str, list[str]] = {}
+        self.telemetry = TelemetryHub(store)
 
     def call(self, fn: Callable[[HonchoClient], Any], on_done: Callable[[Any], None],
              is_current: Callable[[], bool] = lambda: True,
@@ -51,6 +55,22 @@ class AppContext(QObject):
                 self.status.emit(friendly_error(exc))
 
         run_async(lambda: fn(client), done, failed)
+
+    def pick_save_path(self, parent, title: str, default: Path, name_filter: str, kind: str) -> Path | None:
+        """Ask where to save. Starts at ``default`` (or the folder you last used for this ``kind``); None = cancelled."""
+        last = self.store.ui_value(f"save_dir_{kind}", "")
+        start = Path(last) / default.name if last and Path(last).is_dir() else default
+        chosen, _ = QFileDialog.getSaveFileName(parent, title, str(start), name_filter)
+        if not chosen:
+            return None
+        self.store.set_ui_value(f"save_dir_{kind}", str(Path(chosen).parent))
+        return Path(chosen)
+
+    def pick_open_path(self, parent, title: str, default_folder: Path, name_filter: str, kind: str) -> Path | None:
+        last = self.store.ui_value(f"save_dir_{kind}", "")
+        folder = Path(last) if last and Path(last).is_dir() else default_folder
+        chosen, _ = QFileDialog.getOpenFileName(parent, title, str(folder), name_filter)
+        return Path(chosen) if chosen else None
 
     def ws_title(self, ws: str) -> str:
         label = self.store.label(ws)
@@ -106,12 +126,15 @@ def set_combo_items(combo: QComboBox, items: list[tuple[str, Any]], keep_current
 
 
 class ColumnsView(QWidget):
-    """N side-by-side read-only HTML panes with a title each (one per workspace)."""
+    """N side-by-side read-only HTML panes with a title each. ◀ ▶ on a title move that column one step."""
+
+    move_requested = Signal(int, int)  # (column index, -1 for left / +1 for right)
 
     def __init__(self):
         super().__init__()
         self._splitter = QSplitter(Qt.Horizontal)
         self._views: list[HtmlView] = []
+        self._arrows: list[tuple[QToolButton, QToolButton]] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._splitter)
@@ -120,12 +143,27 @@ class ColumnsView(QWidget):
         for i in reversed(range(self._splitter.count())):
             self._splitter.widget(i).deleteLater()
         self._views = []
-        for title in titles:
+        self._arrows = []
+        for i, title in enumerate(titles):
             box = QWidget()
             col = QVBoxLayout(box)
             col.setContentsMargins(2, 0, 2, 0)
-            head = QLabel(f"<b>{escape(title)}</b>")
-            col.addWidget(head)
+            left, right = QToolButton(), QToolButton()
+            for button, text, delta, tip_text in ((left, "◀", -1, "Move this column to the left"),
+                                                  (right, "▶", 1, "Move this column to the right")):
+                button.setText(text)
+                button.setAutoRaise(True)
+                button.setToolTip(tip_text)
+                button.clicked.connect(lambda _checked=False, i=i, delta=delta: self.move_requested.emit(i, delta))
+            left.setEnabled(i > 0)
+            right.setEnabled(i < len(titles) - 1)
+            self._arrows.append((left, right))
+            head_row = QHBoxLayout()
+            head_row.setContentsMargins(0, 0, 0, 0)
+            head_row.addWidget(left)
+            head_row.addWidget(QLabel(f"<b>{escape(title)}</b>"), 1)
+            head_row.addWidget(right)
+            col.addLayout(head_row)
             view = HtmlView()
             col.addWidget(view)
             self._views.append(view)

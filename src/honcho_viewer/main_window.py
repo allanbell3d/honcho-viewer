@@ -11,7 +11,9 @@ from . import __version__, render
 from .async_call import Latest
 from .client import HonchoClient
 from .compare_peers_view import ComparePeersView
+from .compare_reasoning_view import CompareReasoningView
 from .compare_view import CompareView
+from .monitor_view import MonitorView
 from .peer_view import PeerView
 from .store import LocalStore
 from .widgets import AppContext, tip
@@ -80,10 +82,14 @@ class MainWindow(QMainWindow):
 
         self.compare = CompareView(self.ctx)
         self.compare_peers = ComparePeersView(self.ctx)
+        self.compare_reasoning = CompareReasoningView(self.ctx)
+        self.monitor = MonitorView(self.ctx)
         self.tabs = QTabWidget()
         self.tabs.addTab(explore, "Explore")
         self.tabs.addTab(self.compare, "Compare models")
         self.tabs.addTab(self.compare_peers, "Compare peers")
+        self.tabs.addTab(self.compare_reasoning, "Compare reasoning")
+        self.tabs.addTab(self.monitor, "Monitor")
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -134,6 +140,8 @@ class MainWindow(QMainWindow):
         self.workspace_list.blockSignals(False)
         self.compare.set_workspaces(list(self._workspaces))
         self.compare_peers.set_workspaces(list(self._workspaces))
+        self.compare_reasoning.set_workspaces(list(self._workspaces))
+        self.monitor.set_workspaces(list(self._workspaces))
         self.statusBar().showMessage(f"Connected to {url} · {len(rows)} workspaces")
 
     # ---- selection
@@ -182,5 +190,6 @@ class MainWindow(QMainWindow):
         self.ctx.labels_changed.emit()
 
     def closeEvent(self, event) -> None:
+        self.ctx.telemetry.stop()
         self.store.set_ui_value("geometry", bytes(self.saveGeometry().toBase64()).decode())
         super().closeEvent(event)

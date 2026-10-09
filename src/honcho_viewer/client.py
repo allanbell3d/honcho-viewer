@@ -62,22 +62,26 @@ class HonchoClient:
         self.chat_timeout = chat_timeout
 
     # ---- transport -----------------------------------------------------
-    def _request(self, method: str, route: str, path: dict | None = None, query: dict | None = None,
-                 body: dict | None = None, timeout: float | None = None):
+    def _prepare(self, method: str, route: str, path: dict | None = None, query: dict | None = None,
+                 body: dict | None = None, accept: str = "application/json") -> urllib.request.Request:
         if (method, route) not in SAFE_ROUTES:
             raise ValueError(f"Route is not allowlisted (viewer is read-only): {method} {route}")
         url = self.base_url + route.format(**{k: quote(str(v), safe="") for k, v in (path or {}).items()})
         query = {k: str(v).lower() if isinstance(v, bool) else v for k, v in (query or {}).items() if v is not None}
         if query:
             url += "?" + urlencode(query)
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": accept}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         data = None
         if method == "POST":
             data = json.dumps(body or {}).encode()
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        return urllib.request.Request(url, data=data, method=method, headers=headers)
+
+    def _request(self, method: str, route: str, path: dict | None = None, query: dict | None = None,
+                 body: dict | None = None, timeout: float | None = None):
+        req = self._prepare(method, route, path, query, body)
         try:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
                 raw = resp.read()
@@ -161,3 +165,46 @@ class HonchoClient:
                              {"ws": ws, "peer": peer}, body=body, timeout=self.chat_timeout)
         data["elapsed_s"] = round(time.monotonic() - started, 1)
         return data
+
+    def chat_stream(self, ws: str, peer: str, body: dict, on_text=None) -> dict:
+        """Like ``chat`` but streamed: reports when the first words arrive (``first_token_s``).
+
+        ``on_text(text_so_far)`` is called as the answer grows. Falls back to a normal reply if the server
+        ignores ``stream`` and answers with plain JSON.
+        """
+        started = time.monotonic()
+        req = self._prepare("POST", "/v3/workspaces/{ws}/peers/{peer}/chat", {"ws": ws, "peer": peer},
+                            body={**body, "stream": True}, accept="text/event-stream")
+        parts: list[str] = []
+        first = evidence = None
+        try:
+            with urllib.request.urlopen(req, timeout=self.chat_timeout) as resp:
+                if "json" in resp.headers.get_content_type():
+                    data = json.loads(resp.read())
+                    data["elapsed_s"] = round(time.monotonic() - started, 2)
+                    return data
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        chunk = json.loads(line[5:].strip())
+                    except ValueError:
+                        continue
+                    text = (chunk.get("delta") or {}).get("content")
+                    if text:
+                        if first is None:
+                            first = round(time.monotonic() - started, 2)
+                        parts.append(text)
+                        if on_text:
+                            on_text("".join(parts))
+                    if chunk.get("evidence"):
+                        evidence = chunk["evidence"]
+                    if chunk.get("done"):
+                        break
+        except urllib.error.HTTPError as err:
+            raise HonchoError(err.code, _error_detail(err)) from None
+        except OSError as err:
+            raise HonchoError(0, f"Cannot reach {self.base_url}: {getattr(err, 'reason', err)}") from None
+        return {"content": "".join(parts), "evidence": evidence, "first_token_s": first,
+                "elapsed_s": round(time.monotonic() - started, 2)}

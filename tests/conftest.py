@@ -28,6 +28,16 @@ def client(fake):
     return HonchoClient(fake.url, TOKEN)
 
 
+@pytest.fixture(autouse=True)
+def no_native_dialogs(monkeypatch):
+    """File dialogs block forever offscreen. Save accepts the suggested path, Open cancels; tests override."""
+    from PySide6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda parent=None, caption="", directory="", filter="": (directory, "")))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: ("", "")))
+
+
 @pytest.fixture(scope="session")
 def qapp():
     from PySide6.QtWidgets import QApplication
