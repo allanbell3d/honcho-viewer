@@ -13,6 +13,7 @@ from .client import HonchoClient
 from .compare_peers_view import ComparePeersView
 from .compare_reasoning_view import CompareReasoningView
 from .compare_view import CompareView
+from .history_view import HistoryView
 from .monitor_view import MonitorView
 from .peer_view import PeerView
 from .store import LocalStore
@@ -84,12 +85,14 @@ class MainWindow(QMainWindow):
         self.compare_peers = ComparePeersView(self.ctx)
         self.compare_reasoning = CompareReasoningView(self.ctx)
         self.monitor = MonitorView(self.ctx)
+        self.history = HistoryView(self.ctx)
         self.tabs = QTabWidget()
         self.tabs.addTab(explore, "Explore")
         self.tabs.addTab(self.compare, "Compare models")
         self.tabs.addTab(self.compare_peers, "Compare peers")
         self.tabs.addTab(self.compare_reasoning, "Compare reasoning")
         self.tabs.addTab(self.monitor, "Monitor")
+        self.tabs.addTab(self.history, "History")
 
         central = QWidget()
         layout = QVBoxLayout(central)

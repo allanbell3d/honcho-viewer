@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.4 (2026-10-10)
+
+New: **History** tab, everything that happened in one workspace, job by job.
+
+- Rebuilt from the telemetry the viewer received (its own log is read automatically), live events, and any other
+  files or folders of Honcho telemetry you open (**Open logs…**: `.jsonl`, `.jsonl.gz`, one event or a JSON array
+  per line). Opened folders are remembered and re-read every minute; the same event from two sources counts once.
+- Jobs: extraction, dreams, questions and summaries, each with status (ok, retried, partly failed, failed,
+  incomplete), duration, tokens, models, what it wrote (+/− conclusions by level, peer card) and the error of the last
+  attempt. Messages created and deletions are listed too; context reads and maintenance under *Other*.
+- Extraction and summaries have no `run_id` in Honcho's events: extraction calls are linked to their batch by message
+  id and summaries by their input tokens, so both are exact rather than guessed by time.
+- Click a job for its steps (iterations, every model call with errors and retries, tool calls). **Show what it
+  wrote** fetches the conclusions the job created, read-only, using the conclusions list filtered by time.
+- Filters: period, job kinds, peer, session, *Problems only*. Long quiet stretches are marked. **Pending now** shows the
+  workspace's queue counts (Honcho does not list the waiting jobs themselves).
+- Design notes: `docs/design/history-tab.md`.
+
 ## 0.1.3 (2026-10-09)
 
 New: **Monitor** tab, a live view of many runs at once.

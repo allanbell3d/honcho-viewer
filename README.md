@@ -32,6 +32,7 @@ you answer:
 - ⚖️ **What did a model or a setting change?** Put workspaces side by side to see how a different model or Honcho setting changed what it extracted.
 - ⏱️ **What does a reasoning level cost?** Ask the same question at `minimal` to `max` and compare time and tokens.
 - 🧑‍🤝‍🧑 **How do my agents differ?** Ask every agent "what do you know about me?" and read the answers side by side.
+- 📜 **What happened, and what failed?** Every extraction, dream and question in a workspace, with its cost, what it wrote and why it failed.
 
 ## Quick start
 
@@ -74,6 +75,12 @@ Prefer an installable command? `pip install .` gives you a `honcho-viewer` launc
 <tr>
 <td colspan="2" align="center"><b>Monitor</b><br>watch many runs live: what each workspace is doing, its queue, tokens, problems, and which ones are stalled</td>
 </tr>
+<tr>
+<td colspan="2"><img src="docs/images/history.png" alt="History: every job in a workspace with status, tokens, what it wrote, and the steps of the selected job"></td>
+</tr>
+<tr>
+<td colspan="2" align="center"><b>History</b><br>every job in a workspace, what it wrote, what failed and why, down to each model call</td>
+</tr>
 </table>
 
 <sub>All screenshots use made-up demo data. The times and token counts are illustrative, not benchmarks of Honcho or of any model.</sub>
@@ -88,6 +95,7 @@ Prefer an installable command? `pip install .` gives you a `honcho-viewer` launc
 | **Compare peers** | Several peers of one workspace side by side: tick the peers, ask them all the same question |
 | **Compare reasoning** | One peer, the same question at several reasoning levels (`minimal` to `max`), one after another, with time, time to first words and, with live telemetry, real token counts, iterations, tool calls and models. See [live telemetry](docs/telemetry.md) |
 | **Monitor** | A live table with one row per workspace that is doing something: extraction, dreaming and questions, queue progress, model calls, tokens, failed calls and retries, and a **STALLED** flag for a workspace with work waiting that has gone quiet. Rows appear by themselves as Honcho's telemetry arrives. See [live telemetry](docs/telemetry.md) |
+| **History** | Everything that happened in one workspace, job by job: extraction, dreams, questions, summaries, messages and deletions, with status, tokens, what each job wrote and, for failures, every attempt and its error. Click a job for its steps. Built from the telemetry the viewer received and any log files you open |
 
 All three Compare tabs can **Save results** (you choose where; the default is a dated, self-contained HTML page you
 can open in any browser) and **Open saved results…** to bring a saved page back into the tab with all its views and
@@ -101,7 +109,7 @@ for the "What changed?" comparison. More detail in the [user guide](docs/guide.m
 call that costs something is **Ask** (it runs your server's LLM), and it only happens when you press the button.
 A test checks that the app never calls a route outside the allowlist.
 
-The one thing that listens on the network is the optional **telemetry listener** (shared by Compare reasoning and Monitor). It is off until
+The one thing that listens on the network is the optional **telemetry listener** (shared by Compare reasoning, Monitor and History). It is off until
 you press Start, it only *receives* events that Honcho posts (it never calls back or writes to Honcho), and it can be
 protected with a shared secret. Details in [docs/telemetry.md](docs/telemetry.md).
 
