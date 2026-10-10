@@ -97,6 +97,28 @@ then asks questions. It needs the telemetry listener (left panel): press **Start
 
 Honcho can *sample* its high-volume events (a server setting). If yours does, the call and token totals undercount.
 
+## History
+
+Use it to see everything that happened in one workspace: which jobs ran, which failed and why, what each one wrote,
+and what it cost. It is built from Honcho's telemetry, so it covers the time the viewer was listening, plus any log
+files you open.
+
+- Pick the **workspace** and the **period** (last hour to all time, or *Custom…* for two dates). **Live** keeps
+  adding events as they arrive.
+- Each row is a **job**: *extraction* (messages turned into conclusions), *dream*, *question* (a chat answer) or
+  *summary*, or a single event: messages created, a deletion. **Other** adds context reads and maintenance.
+- **Status**: *ok*, *retried* (worked after failed attempts), *partly failed* (an observer or dream specialist failed),
+  *failed* (gave up) or *incomplete* (no end in the log: still running, or not recorded). Problem rows are tinted red.
+- **Wrote** shows conclusions created (+) and deleted (−) and whether the peer card changed.
+- Filter by **peer**, **session** or **Problems only**. Long quiet stretches (over 30 minutes) are marked when the
+  table is sorted by time. The totals line adds up whatever is shown.
+- Click a job to see its **steps**: iterations, every model call with its tokens, errors and retries, and tool calls.
+  **Show what it wrote** (extraction and dreams) fetches the conclusions the job created from Honcho, read-only.
+  Conclusions deleted since can't be shown.
+- **Pending now** is the workspace's queue right now. Honcho reports only counts, not the waiting jobs themselves.
+- **Open logs…** reads other folders or files of Honcho telemetry (for example an archive you keep). They are
+  remembered and re-read every minute. The same event from two places counts once.
+
 ## Rearranging the columns
 
 On the three Compare tabs every column title has a **◀** and a **▶**. Click one to move that column a step to the

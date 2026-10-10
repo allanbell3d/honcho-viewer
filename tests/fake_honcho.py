@@ -155,10 +155,12 @@ class FakeHoncho:
                 return self._page(ws["sessions"][sid]["messages"], query)
             case ("POST", ["v3", "workspaces", _, "conclusions", "list"]):
                 filters = body.get("filters") or {}
-                bad = set(filters) - {"observer_id", "observed_id", "level", "session_id"}
+                bad = set(filters) - {"observer_id", "observed_id", "level", "session_id", "created_at"}
                 if bad:
                     return 422, {"detail": [{"msg": f"bad filter {sorted(bad)}"}]}
-                rows = [c for c in ws["conclusions"] if all(c.get(k) == v for k, v in filters.items())]
+                window = filters.pop("created_at", None) or {}
+                rows = [c for c in ws["conclusions"] if all(c.get(k) == v for k, v in filters.items())
+                        and window.get("gte", "") <= c["created_at"] <= window.get("lte", "￿")]
                 return self._page(rows, query)
             case ("POST", ["v3", "workspaces", _, "conclusions", "query"]):
                 f = body.get("filters") or {}

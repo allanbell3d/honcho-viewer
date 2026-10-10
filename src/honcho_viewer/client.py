@@ -148,6 +148,14 @@ class HonchoClient:
                              {"filters": self._conclusion_filters(observer, observed, level)})
         return int(data.get("total", 0))
 
+    def conclusions_between(self, ws: str, start_iso: str, end_iso: str, observed: str | None = None,
+                            observer: str | None = None, level: str | None = None,
+                            max_items: int = 500) -> list[dict]:
+        """Conclusions created in a time window (what one job wrote), newest first. Same read-only list route."""
+        filters = {**(self._conclusion_filters(observer, observed, level) or {}),
+                   "created_at": {"gte": start_iso, "lte": end_iso}}
+        return self._all_pages("/v3/workspaces/{ws}/conclusions/list", {"ws": ws}, {"filters": filters}, max_items)
+
     def get_conclusion(self, ws: str, conclusion_id: str) -> dict:
         return self._request("GET", "/v3/workspaces/{ws}/conclusions/{conclusion}",
                              {"ws": ws, "conclusion": conclusion_id})

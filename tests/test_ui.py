@@ -1055,3 +1055,125 @@ def test_moving_columns_works_on_compare_models_and_reasoning_too(window):
 
 def test_viewer_never_calls_unknown_routes(on_alice, fake):
     assert fake.unexpected == []
+
+
+# ---- History tab ------------------------------------------------------------------------------------------
+def _history_events():
+    from tests.test_history import _batch, _call, _traced, ev
+
+    ws = {"workspace_name": "test-qwen"}
+    return [_call(1, "q-ok", **ws), ev("dialectic.completed", 2, run_id="q-ok", peer_name="alice", **ws),
+            _call(5, "q-bad", "error", **ws), ev("llm.call.traced", 5, run_id="q-bad", peer_name="alice", **ws),
+            {**_traced(3000, "t1", ["m1"]), "data": {**_traced(3000, "t1", ["m1"])["data"], **ws}},
+            {**_batch(3001, "m1", "m1"), "data": {**_batch(3001, "m1", "m1")["data"], **ws}}]
+
+
+def _open_history(window, events=None, folder=None):
+    import json
+
+    from tests.test_history import wrap
+
+    tab = window.history
+    log = folder or window.ctx.telemetry.log.folder
+    log.mkdir(parents=True, exist_ok=True)
+    (log / "events-20261009.jsonl").write_text("".join(wrap(e) + "\n" for e in (events or _history_events())),
+                                               encoding="utf-8")
+    tab.period_combo.setCurrentIndex(tab.period_combo.findText("All time"))
+    tab._loaded_once = True  # read here instead of in the background when the tab is shown
+    tab.load_sources(wait=True)
+    window.tabs.setCurrentWidget(tab)
+    return tab
+
+
+def _history_rows(tab):
+    from honcho_viewer.history_view import COLUMNS
+
+    rows = []
+    for r in range(tab.table.rowCount()):
+        if tab.table.columnSpan(r, 0) > 1:
+            rows.append({"separator": tab.table.item(r, 0).text()})
+        else:
+            rows.append({name: tab.table.item(r, c).text() for c, (name, _) in enumerate(COLUMNS)})
+    return rows
+
+
+def test_history_reads_the_viewers_own_log_and_lists_jobs_newest_first(window):
+    tab = _open_history(window)
+
+    assert tab.ws_combo.currentData() == "test-qwen"
+    jobs = [r for r in _history_rows(tab) if "Job" in r]
+    assert [(r["Job"], r["Status"]) for r in jobs] == [("extraction", "ok"), ("question", "failed"),
+                                                        ("question", "ok")]
+    assert jobs[0]["Wrote"] == "+6 concl." and jobs[1]["Problems"].endswith("APIStatusError")
+    assert "1 failed" in tab.totals_label.text() and "3</b> shown" in tab.totals_label.text()
+
+
+def test_history_marks_long_quiet_stretches_between_jobs(window):
+    tab = _open_history(window)
+    rows = _history_rows(tab)
+    assert any("quiet" in r.get("separator", "") for r in rows)  # 50 minutes between the questions and the batch
+    tab._sort_clicked(1)  # sorted by something else: no separators
+    assert not any("separator" in r for r in _history_rows(tab))
+
+
+def test_history_filters_problems_and_kinds(window):
+    tab = _open_history(window)
+    tab.failed_check.setChecked(True)
+    assert [(r["Job"], r["Status"]) for r in _history_rows(tab) if "Job" in r] == [("question", "failed")]
+    tab.failed_check.setChecked(False)
+    dict((b.text(), b) for b, _ in tab.kind_checks)["Questions"].setChecked(False)
+    assert [r["Job"] for r in _history_rows(tab) if "Job" in r] == ["extraction"]
+
+
+def test_history_job_detail_shows_its_steps_and_errors(window):
+    tab = _open_history(window)
+    row = next(i for i, r in enumerate(_history_rows(tab)) if r.get("Status") == "failed")
+    tab.table.selectRow(row)
+    html = tab.detail.toPlainText()
+    assert "question · failed" in html and "APIStatusError" in html and "attempt 1" in html
+
+
+def test_history_show_what_it_wrote_fetches_the_conclusions_made_during_the_job(window):
+    from tests.test_history import ev
+
+    batch = ev("representation.completed", 0, workspace_name="test-qwen", observed="alice", message_count=2,
+               explicit_conclusion_count=2, total_duration_ms=20000, latest_message_id="x")
+    batch["time"] = "2026-10-01T10:00:10+00:00"  # the fake server's conclusions were made at 10:00 that day
+    tab = _open_history(window, [batch])
+    tab.table.selectRow(0)
+    assert tab.wrote_btn.isEnabled()
+
+    tab.wrote_btn.click()
+
+    wait_for(lambda: "What it wrote" in tab.detail.toPlainText())
+    text = tab.detail.toPlainText()
+    assert "Alice fact 0" in text and "Alice fact 5" not in text  # only what was created in the job's window
+
+
+def test_history_picks_up_live_events_from_the_listener(window):
+    from tests.test_history import ev
+
+    tab = _open_history(window)
+    window.show()
+    window.ctx.telemetry._batch([ev("message.created", 3500, workspace_name="test-qwen", message_count=7)], 0)
+    window.ctx.telemetry.events_received.emit(1)
+    wait_for(lambda: any(r.get("Job") == "messages" for r in _history_rows(tab)), timeout=3)
+
+
+def test_history_open_folder_reads_it_and_remembers_it(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    from tests.test_history import ev
+
+    other = tmp_path / "elsewhere"
+    tab = _open_history(window, [], folder=None)
+    other.mkdir()
+    (other / "events-x.jsonl").write_text(__import__("json").dumps(
+        ev("message.created", 1, workspace_name="archive-ws", message_count=1)) + "\n", encoding="utf-8")
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(other)))
+    tab.load_sources = lambda paths=None, wait=False, _orig=tab.load_sources: _orig(paths, wait=True)
+
+    tab._open_folder()
+
+    assert str(other) in window.store.ui_value("history_sources")
+    assert "archive-ws" in tab.history.workspaces()

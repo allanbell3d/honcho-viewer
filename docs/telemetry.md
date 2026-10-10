@@ -32,15 +32,19 @@ Notes:
 
 ## One listener, several tabs
 
-The listener is shared. Compare reasoning uses it to match each answer to its event, and the **Monitor** tab uses
-the same events to show every workspace live. Starting or stopping it in one tab starts or stops it for all of them.
-Open the Monitor tab to see all workspaces at once.
+The listener is shared. Compare reasoning uses it to match each answer to its event, the **Monitor** tab uses
+the same events to show every workspace live, and the **History** tab turns them into a job-by-job record of a
+workspace. Starting or stopping it in one tab starts or stops it for all of them.
 
 ## What is saved
 
 The events the viewer receives are also written to `local/telemetry/events-YYYYMMDD.jsonl` (one file per UTC day).
 The oldest day is deleted when the folder passes **1 GB**; change that with `telemetry_cap_mb` under `"ui"` in
 `local/settings.json` (0 = no limit).
+
+The **History** tab reads this folder automatically. If you keep telemetry elsewhere too (your own receiver, an
+archive), open it there with **Open logs…**: any files of Honcho CloudEvents work, one per line (plain, or wrapped as
+`{"received_at": ..., "event": {...}}`), a JSON array per line, and `.jsonl.gz`.
 
 If your Honcho has `TELEMETRY_TRACE_PAYLOADS_ENABLED` on, the events contain full prompts and answers, which means
 real memory content. `local/` is git-ignored; keep it that way and don't share the folder.

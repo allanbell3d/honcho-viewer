@@ -36,6 +36,8 @@ def no_native_dialogs(monkeypatch):
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         staticmethod(lambda parent=None, caption="", directory="", filter="": (directory, "")))
     monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: ("", "")))
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", staticmethod(lambda *a, **k: ([], "")))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: ""))
 
 
 @pytest.fixture(scope="session")

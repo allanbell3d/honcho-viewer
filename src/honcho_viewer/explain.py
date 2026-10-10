@@ -34,6 +34,9 @@ TAB_HINTS = {
     "monitor": "Watch what Honcho is doing right now, one row per workspace: extraction, dreaming, questions, model "
                "calls, problems and queue progress. Rows appear by themselves as events arrive. Start the "
                "listener and point Honcho's TELEMETRY_ENDPOINT at it.",
+    "history": "Everything that happened in one workspace, job by job: extraction, dreams, questions and summaries, "
+               "what each one wrote, what failed and why. Built from the telemetry the viewer received and any log "
+               "files you open. Click a job for its steps.",
 }
 
 ASK_OPTIONS = {
