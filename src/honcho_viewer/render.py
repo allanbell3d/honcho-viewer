@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from html import escape
 
 from .explain import LEVELS
@@ -17,7 +18,15 @@ def esc(text) -> str:
 
 
 def short_time(iso: str | None) -> str:
-    return (iso or "")[:16].replace("T", " ")
+    """'YYYY-MM-DD HH:MM' in this PC's time zone. Honcho sends UTC with an offset (or Z), which is
+    converted; the viewer's own stamps have no offset and are already local, so they are kept."""
+    try:
+        when = datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+    except ValueError:
+        return (iso or "")[:16].replace("T", " ")
+    if when.tzinfo is not None:
+        when = when.astimezone()
+    return when.strftime("%Y-%m-%d %H:%M")
 
 
 def origin(level: str) -> str:

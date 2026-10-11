@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.6 (2026-10-11)
+
+- Conclusions table: columns can be resized by dragging their edges, moved by dragging their headers (the order
+  is remembered; right-click a header to reset it or fit the columns to the window), and sorted by clicking a
+  header. The Conclusion column fills the spare width until you resize a column yourself.
+- **Wrap text** (on by default, remembered): long conclusions show in full on several lines instead of being cut
+  off with "…". Untick it for the compact one-line view.
+
+## 0.1.5 (2026-10-11)
+
+- Times from Honcho (conclusions, messages, sessions) are shown in this PC's time zone. Honcho always sends UTC, and
+  the Explore and Overview panes showed it unconverted, so times were off by the UTC offset. The
+  viewer's own times (snapshots, saved comparisons) were already local and are unchanged; History and Monitor were
+  already local.
+
 ## 0.1.4 (2026-10-10)
 
 New: **History** tab, everything that happened in one workspace, job by job.

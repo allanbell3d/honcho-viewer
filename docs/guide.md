@@ -24,6 +24,10 @@ Inside a peer:
   - *From messages* conclusions were extracted straight from what someone said.
   - *Dream* conclusions (deductive, inductive, contradiction) are produced later by dreaming.
   - Select a row and press `1` correct, `2` wrong, `3` unsure, `0` clear. The bar shows your accuracy.
+  - Drag a column's edge to resize it and its header to move it; click a header to sort (click again to reverse).
+    The Conclusion column fills the spare width until you resize a column yourself; right-click a header for
+    *Fit columns to the window* or *Reset column order*. **Wrap text** (on by default, remembered) shows long
+    conclusions in full on several lines; untick it for one line each.
   - **Find supporting messages** searches the raw messages for evidence.
   - **Snapshot** (bottom right, under the conclusions) saves the current list as a dated file: a file dialog lets you
     choose where, and nothing is ever overwritten. After a dream, **What changed?** shows what was added or removed
@@ -124,7 +128,7 @@ files you open.
 On the three Compare tabs every column title has a **◀** and a **▶**. Click one to move that column a step to the
 left or right, so any two columns can sit side by side without closing the others. The order applies to every view
 and is kept when you ask again and when you save results (a page you open again keeps its order too). In the
-Monitor, drag a column header instead.
+Monitor and the Conclusions table, drag a column header instead.
 
 ## Saving a comparison
 
