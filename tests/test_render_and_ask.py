@@ -13,6 +13,15 @@ def test_text_is_html_escaped():
     assert render.esc("<b>hi</b>\nthere") == "&lt;b&gt;hi&lt;/b&gt;<br>there"
 
 
+def test_times_from_honcho_are_shown_in_local_time_and_the_viewers_own_are_kept():
+    from datetime import datetime, timezone
+    utc = datetime(2026, 10, 10, 12, 29, tzinfo=timezone.utc)
+    assert render.short_time("2026-10-10T12:29:41.123456Z") == utc.astimezone().strftime("%Y-%m-%d %H:%M")
+    assert render.short_time("2026-10-10T16:29:41+04:00") == render.short_time("2026-10-10T12:29:41+00:00")
+    assert render.short_time("2026-09-01T10:00:00") == "2026-09-01 10:00"  # snapshot stamp: already local
+    assert render.short_time("x") == "x" and render.short_time(None) == ""
+
+
 def test_card_placeholder_when_missing():
     assert "No peer card" in render.card_html(None)
     assert "<li>lives in Lisbon</li>" in render.card_html(["lives in Lisbon"])
