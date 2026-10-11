@@ -147,6 +147,84 @@ def test_text_filter_hides_rows(on_alice):
     assert tab.table.rowCount() == 1
 
 
+def _conclusion_titles(tab):
+    header = tab.table.horizontalHeader()
+    return [tab.table.horizontalHeaderItem(header.logicalIndex(v)).text() for v in range(header.count())]
+
+
+def test_conclusion_columns_can_be_resized_and_moved_and_the_order_is_remembered(on_alice, tmp_path):
+    from PySide6.QtWidgets import QHeaderView
+
+    from honcho_viewer.main_window import MainWindow
+
+    tab = on_alice.peer_view.conclusions
+    header = tab.table.horizontalHeader()
+    assert all(header.sectionResizeMode(c) == QHeaderView.Interactive for c in range(header.count()))
+    assert header.sectionsMovable()
+
+    header.moveSection(header.visualIndex(5), 1)  # drag "Created" right after the rating mark
+
+    assert _conclusion_titles(tab)[:3] == ["", "Created", "Level"]
+    fresh = MainWindow(LocalStore(tmp_path))
+    assert _conclusion_titles(fresh.peer_view.conclusions)[:3] == ["", "Created", "Level"]
+    fresh.close()
+    tab.reset_order()
+    assert _conclusion_titles(tab)[:3] == ["", "Level", "Conclusion"]
+
+
+def test_conclusion_column_takes_the_spare_width_until_you_drag_it(on_alice):
+    tab = on_alice.peer_view.conclusions
+    table = tab.table
+    others = sum(table.columnWidth(c) for c in range(table.columnCount()) if c != 2)
+    assert table.columnWidth(2) >= table.viewport().width() - others - 1  # fills the rest of the row
+
+    table.horizontalHeader().resizeSection(2, 150)  # the user drags its edge
+    tab.load()
+    wait_for(lambda: table.rowCount() == 6)
+
+    assert table.columnWidth(2) == 150  # a hand-set width survives a reload
+
+
+def test_wrap_text_shows_long_conclusions_in_full_and_is_remembered(on_alice, fake, tmp_path):
+    tab = on_alice.peer_view.conclusions
+    fake.workspaces["test-qwen"]["conclusions"].append(
+        {"id": "long", "content": "Alice " + "talks about sailing and the sea " * 12, "observer_id": "alice",
+         "observed_id": "alice", "session_id": None, "level": "explicit", "source_ids": [],
+         "times_derived": 1, "created_at": "2026-10-06T10:00:00Z"})
+    tab.load()
+    wait_for(lambda: tab.table.rowCount() == 7)
+    tab.table.horizontalHeader().resizeSection(2, 200)
+    row = next(r for r in range(7) if tab.table.item(r, 0).data(Qt.UserRole)["id"] == "long")
+    line = tab.table.fontMetrics().height()
+
+    assert tab.wrap_check.isChecked() and tab.table.wordWrap()  # on by default
+    wait_for(lambda: tab.table.rowHeight(row) > 4 * line)  # several lines tall
+
+    tab.wrap_check.setChecked(False)
+
+    assert not tab.table.wordWrap() and tab.table.rowHeight(row) < 2 * line  # back to one line
+    assert {tab.table.rowHeight(r) for r in range(7)} == {tab.table.rowHeight(row)}
+    assert LocalStore(tmp_path).ui_value("conclusions_wrap") is False
+
+
+def test_clicking_a_conclusion_header_sorts_and_rating_still_hits_the_right_row(on_alice, tmp_path):
+    tab = on_alice.peer_view.conclusions
+    texts = lambda: [tab.table.item(r, 2).text() for r in range(tab.table.rowCount())]  # noqa: E731
+
+    tab.table.horizontalHeader().sectionClicked.emit(2)
+    assert texts() == sorted(texts(), key=str.lower)
+    tab.table.horizontalHeader().sectionClicked.emit(2)
+    assert texts() == sorted(texts(), key=str.lower, reverse=True)
+
+    tab.table.selectRow(0)
+    first = tab.current_conclusion()
+    assert first["content"] == texts()[0]
+    tab.rate("wrong")
+
+    assert LocalStore(tmp_path).rating("test-qwen", first["id"]) == "wrong"
+    assert tab.table.item(0, 0).text() == "×" and tab.table.currentRow() == 1
+
+
 def test_dream_conclusion_shows_its_premises(on_alice):
     tab = on_alice.peer_view.conclusions
     row = next(i for i in range(tab.table.rowCount())

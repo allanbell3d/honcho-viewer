@@ -5,10 +5,10 @@ import json
 import time
 from html import escape
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
-                               QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit,
+                               QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit,
                                QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
                                QWidget)
 
@@ -107,6 +107,8 @@ class OverviewTab(_PeerTab):
 
 # ---- Conclusions ------------------------------------------------------------
 COLUMNS = ("", "Level", "Conclusion", "By → about", "Session", "Created")
+CONCLUSION_COL = 2
+MIN_CONCLUSION_WIDTH = 200
 
 
 class ConclusionsTab(_PeerTab):
@@ -130,20 +132,37 @@ class ConclusionsTab(_PeerTab):
         self.text_filter.textChanged.connect(self._fill_table)
         self.unrated_only = tip(QCheckBox("Unrated only"), "Hide conclusions you already rated.")
         self.unrated_only.toggled.connect(self._fill_table)
+        self.wrap_check = tip(QCheckBox("Wrap text"), "Show long conclusions in full, on several lines. Untick for "
+                                                      "one line each (the full text is in the tooltip and below).")
+        self.wrap_check.setChecked(bool(ctx.store.ui_value("conclusions_wrap", True)))
+        self.wrap_check.toggled.connect(self._wrap_toggled)
         reload_btn = QPushButton("Reload")
         reload_btn.clicked.connect(self.load)
 
+        self._sort: tuple[int, Qt.SortOrder] | None = None  # None = the order Honcho returned
+        self._fitting = False
+        self._widths_set_by_hand = False
+        self._rows_timer = QTimer(self, singleShot=True, interval=150)  # re-measure wrapped rows after a resize
+        self._rows_timer.timeout.connect(self._fit_rows)
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
-        self.table.setWordWrap(False)
+        self.table.setWordWrap(self.wrap_check.isChecked())
         header = self.table.horizontalHeader()
-        for col in range(len(COLUMNS)):
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(QHeaderView.Interactive)  # drag a column edge to resize it
+        header.setSectionsMovable(True)  # drag a column header to rearrange the table
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(False)  # until a header is clicked
+        self._restore_order()
+        header.sectionMoved.connect(self._save_order)
+        header.sectionClicked.connect(self._sort_clicked)
+        header.sectionResized.connect(self._column_resized)
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._header_menu)
+        self.table.viewport().installEventFilter(self)  # keep the Conclusion column filling the width
         self.table.itemSelectionChanged.connect(self._on_select)
 
         rate_row = QHBoxLayout()
@@ -177,6 +196,7 @@ class ConclusionsTab(_PeerTab):
             filters.addWidget(widget)
         filters.addWidget(self.text_filter, 1)
         filters.addWidget(self.unrated_only)
+        filters.addWidget(self.wrap_check)
         filters.addWidget(reload_btn)
 
         detail_box = QWidget()
@@ -232,9 +252,22 @@ class ConclusionsTab(_PeerTab):
     def _visible_rows(self) -> list[dict]:
         text = self.text_filter.text().strip().lower()
         unrated = self.unrated_only.isChecked()
-        return [c for c in self.rows
+        rows = [c for c in self.rows
                 if (not text or text in (c.get("content") or "").lower())
                 and not (unrated and self.ctx.store.rating(self.ws, c["id"]))]
+        if self._sort:
+            column, order = self._sort
+            rows.sort(key=lambda c: self._sort_value(c, column), reverse=order == Qt.DescendingOrder)
+        return rows
+
+    def _sort_value(self, c: dict, column: int):
+        level = c.get("level", "")
+        return [self.ctx.store.rating(self.ws, c["id"]) or "",
+                CONCLUSION_LEVELS.index(level) if level in CONCLUSION_LEVELS else len(CONCLUSION_LEVELS),
+                (c.get("content") or "").lower(),
+                f"{c.get('observer_id')} → {c.get('observed_id')}".lower(),
+                c.get("session_id") or "",
+                c.get("created_at") or ""][column]
 
     def _mark_item(self, c: dict) -> QTableWidgetItem:
         rating = self.ctx.store.rating(self.ws, c["id"])
@@ -263,7 +296,85 @@ class ConclusionsTab(_PeerTab):
                     item.setToolTip(text)
                 self.table.setItem(r, col, item)
         self.table.blockSignals(False)
+        self._fit_columns()
+        self._fit_rows()
         self._update_summary()
+
+    # -- columns: resize, wrap, sort, move
+    def _fit_columns(self, measure: bool = True) -> None:
+        """Small columns fit their contents and the Conclusion column gets the rest, until you drag an edge."""
+        if self._widths_set_by_hand:
+            return
+        others = [c for c in range(len(COLUMNS)) if c != CONCLUSION_COL]
+        self._fitting = True
+        try:
+            if measure:
+                for col in others:
+                    self.table.resizeColumnToContents(col)
+            spare = self.table.viewport().width() - sum(self.table.columnWidth(c) for c in others)
+            self.table.setColumnWidth(CONCLUSION_COL, max(MIN_CONCLUSION_WIDTH, spare))
+        finally:
+            self._fitting = False
+
+    def _fit_rows(self) -> None:
+        self._rows_timer.stop()
+        self.table.resizeRowsToContents()  # wrapped: tall enough for the whole text; unwrapped: one line
+
+    def _column_resized(self, _column: int, _old: int, _new: int) -> None:
+        if not self._fitting:
+            self._widths_set_by_hand = True
+        if self.table.wordWrap():
+            self._rows_timer.start()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.table.viewport() and event.type() == QEvent.Resize:
+            self._fit_columns(measure=False)
+        return super().eventFilter(obj, event)
+
+    def fit_to_window(self) -> None:
+        self._widths_set_by_hand = False
+        self._fit_columns()
+
+    def _wrap_toggled(self, on: bool) -> None:
+        self.ctx.store.set_ui_value("conclusions_wrap", on)
+        self.table.setWordWrap(on)
+        self._fit_rows()
+
+    def _sort_clicked(self, column: int) -> None:
+        order = Qt.DescendingOrder if self._sort == (column, Qt.AscendingOrder) else Qt.AscendingOrder
+        self._sort = (column, order)
+        header = self.table.horizontalHeader()
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(column, order)
+        self._fill_table()
+
+    def _save_order(self, *_args) -> None:
+        header = self.table.horizontalHeader()
+        self.ctx.store.set_ui_value("conclusions_columns", [header.logicalIndex(v) for v in range(header.count())])
+
+    def _restore_order(self) -> None:
+        order = self.ctx.store.ui_value("conclusions_columns")
+        if not isinstance(order, list) or sorted(order) != list(range(len(COLUMNS))):
+            return  # nothing saved, or the columns changed since: keep the default order
+        header = self.table.horizontalHeader()
+        for position, logical in enumerate(order):
+            header.moveSection(header.visualIndex(logical), position)
+
+    def reset_order(self) -> None:
+        header = self.table.horizontalHeader()
+        for logical in range(len(COLUMNS)):
+            header.moveSection(header.visualIndex(logical), logical)
+        self._save_order()
+
+    def _header_menu(self, pos) -> None:
+        menu = QMenu(self)
+        fit = menu.addAction("Fit columns to the window")
+        reset = menu.addAction("Reset column order")
+        chosen = menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
+        if chosen is fit:
+            self.fit_to_window()
+        elif chosen is reset:
+            self.reset_order()
 
     def _update_summary(self) -> None:
         n = len(self.rows)

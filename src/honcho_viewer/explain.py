@@ -20,7 +20,8 @@ TAB_HINTS = {
                 "conclusions about this peer (up to 100, newest first); the Conclusions tab has all of them.",
     "conclusions": "Conclusions are the individual 'memories'. Explicit ones come straight from messages; "
                    "deductive, inductive and contradiction ones are produced later by dreaming. "
-                   "Rate them with 1 / 2 / 3 to measure accuracy.",
+                   "Rate them with 1 / 2 / 3 to measure accuracy. Drag column edges and headers to resize or "
+                   "move them; click a header to sort.",
     "messages": "The raw conversation Honcho received. Everything else is derived from this.",
     "ask": "Ask Honcho a question about this peer (the 'dialectic' API). It searches its memory, "
            "reasons, and answers. Nothing is stored. Hover any option to learn what it does.",
