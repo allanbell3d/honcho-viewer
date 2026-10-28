@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import time
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 import urllib.request
+from typing import Callable
 from urllib.parse import quote, urlencode
 
 SAFE_ROUTES = frozenset({
@@ -30,6 +32,10 @@ SAFE_ROUTES = frozenset({
 REASONING_LEVELS = ("minimal", "low", "medium", "high", "max")
 CONCLUSION_LEVELS = ("explicit", "deductive", "inductive", "contradiction")
 PAGE_SIZE = 100  # server maximum
+PARALLEL_PAGES = 8  # pages in flight after the first. Measured 2026-10-29 against the NAS (API_WORKERS=1): 32 pages take
+# 3.7 s with 1, 3.8 s with 4, 3.0 s with 8, 3.1 s with 16 in flight; the server answers one request at a time, so more
+# client threads only queue up there. The gain is on the server side (more API workers), not here.
+STREAM_CHUNK_PAGES = 8  # a streamed load reports progress after every group of this many pages
 REPRESENTATION_MAX = 100  # server maximum for max_conclusions; without it the server returns only 25
 
 
@@ -94,14 +100,46 @@ class HonchoClient:
         except ValueError:
             raise HonchoError(0, "Server returned a non-JSON response (is the URL right?)") from None
 
-    def _all_pages(self, route: str, path: dict, body: dict | None = None, max_items: int | None = None) -> list:
-        items, page = [], 1
-        while True:
-            data = self._request("POST", route, path, {"page": page, "size": PAGE_SIZE}, body or {})
-            items.extend(data.get("items", []))
-            if page >= (data.get("pages") or 1) or (max_items is not None and len(items) >= max_items):
-                return items[:max_items]
-            page += 1
+    def _all_pages(self, route: str, path: dict, body: dict | None = None, max_items: int | None = None,
+                   query: dict | None = None) -> list:
+        """Fetch every page of a list route (or enough pages for max_items), in page order.
+
+        Page 1 is fetched alone to learn the page count; the remaining pages are requested
+        PARALLEL_PAGES at a time. Each request is its own connection, so the calls are safe
+        to run from threads. The first error aborts the fetch.
+        """
+        items: list = []
+        for chunk, _total, _done, _pages in self._stream_pages(route, path, body, max_items, query):
+            items.extend(chunk)
+        return items[:max_items]
+
+    def _stream_pages(self, route: str, path: dict, body: dict | None = None, max_items: int | None = None,
+                      query: dict | None = None, keep_going: Callable[[], bool] = lambda: True):
+        """Yield (items, total, pages_done, pages) as a list route is read: page 1 at once, then the
+        remaining pages in groups of STREAM_CHUNK_PAGES (PARALLEL_PAGES in flight). Stops early when
+        keep_going() turns false (the caller moved on), so an abandoned load does not keep the server busy."""
+        def fetch(page: int) -> list:
+            return self._request("POST", route, path, {**(query or {}), "page": page, "size": PAGE_SIZE},
+                                 body or {}).get("items", [])
+
+        first = self._request("POST", route, path, {**(query or {}), "page": 1, "size": PAGE_SIZE}, body or {})
+        pages = first.get("pages") or 1
+        if max_items is not None:
+            pages = min(pages, -(-max_items // PAGE_SIZE))  # ceil: pages needed for max_items
+        total = first.get("total") if max_items is None else min(first.get("total") or 0, max_items)
+        yield list(first.get("items", [])), total, 1, pages
+        done = 1
+        if pages > 1:
+            with ThreadPoolExecutor(max_workers=min(PARALLEL_PAGES, pages - 1)) as pool:
+                for start in range(2, pages + 1, STREAM_CHUNK_PAGES):
+                    if not keep_going():
+                        return
+                    group = range(start, min(start + STREAM_CHUNK_PAGES, pages + 1))
+                    items: list = []
+                    for chunk in pool.map(fetch, group):
+                        items.extend(chunk)
+                    done += len(group)
+                    yield items, total, done, pages
 
     # ---- reads ---------------------------------------------------------
     def health(self) -> dict:
@@ -130,9 +168,28 @@ class HonchoClient:
     def peer_sessions(self, ws: str, peer: str) -> list[dict]:
         return self._all_pages("/v3/workspaces/{ws}/peers/{peer}/sessions", {"ws": ws, "peer": peer})
 
-    def messages_page(self, ws: str, session: str, page: int = 1, size: int = 50) -> dict:
+    def messages_page(self, ws: str, session: str, page: int = 1, size: int = 50, reverse: bool = False) -> dict:
         return self._request("POST", "/v3/workspaces/{ws}/sessions/{session}/messages/list",
-                             {"ws": ws, "session": session}, {"page": page, "size": size}, {})
+                             {"ws": ws, "session": session}, {"page": page, "size": size, "reverse": reverse}, {})
+
+    def messages_rest(self, ws: str, session: str, after_page: int, pages: int, size: int = 50) -> list[dict]:
+        """Every message page after ``after_page`` up to ``pages``, in order (PARALLEL_PAGES in flight)."""
+        todo = range(after_page + 1, pages + 1)
+        if not todo:
+            return []
+        with ThreadPoolExecutor(max_workers=min(PARALLEL_PAGES, len(todo))) as pool:
+            return [m for page in pool.map(lambda p: self.messages_page(ws, session, p, size).get("items", []), todo)
+                    for m in page]
+
+    def session_last_activity(self, ws: str, session: str) -> str | None:
+        """Time of the newest message in the session (Honcho keeps no updated_at on sessions)."""
+        items = self.messages_page(ws, session, 1, 1, reverse=True).get("items", [])
+        return items[0].get("created_at") if items else None
+
+    def sessions_last_activity(self, ws: str, sessions: list[str]) -> dict[str, str]:
+        with ThreadPoolExecutor(max_workers=min(PARALLEL_PAGES, max(1, len(sessions)))) as pool:
+            found = pool.map(lambda sid: (sid, self.session_last_activity(ws, sid)), sessions)
+        return {sid: t for sid, t in found if t}
 
     def _conclusion_filters(self, observer, observed, level) -> dict | None:
         return _clean({"observer_id": observer, "observed_id": observed, "level": level}) or None
@@ -141,6 +198,14 @@ class HonchoClient:
                          level: str | None = None, max_items: int | None = None) -> list[dict]:
         return self._all_pages("/v3/workspaces/{ws}/conclusions/list", {"ws": ws},
                                {"filters": self._conclusion_filters(observer, observed, level)}, max_items)
+
+    def stream_conclusions(self, ws: str, observer: str | None, observed: str | None, level: str | None,
+                           keep_going: Callable[[], bool]):
+        """list_conclusions as a generator of (items, total, pages_done, pages); see _stream_pages.
+        Honcho returns conclusions newest first, so the recent ones are on screen within a second."""
+        return self._stream_pages("/v3/workspaces/{ws}/conclusions/list", {"ws": ws},
+                                  {"filters": self._conclusion_filters(observer, observed, level)},
+                                  keep_going=keep_going)
 
     def count_conclusions(self, ws: str, observer: str | None = None, observed: str | None = None,
                           level: str | None = None) -> int:

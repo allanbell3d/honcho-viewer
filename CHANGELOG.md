@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.7 (2026-10-29)
+
+- Conclusions load lazily. The first 100 rows (newest first) are on screen after one request; the rest stream in
+  behind them, 8 pages at a time, with the progress in the summary line ("loading 4,100 of 90,284…"). Filtering,
+  rating and the detail pane work on what has arrived; a column sort is applied once the load completes. Changing
+  the peer or a filter abandons the running load, so the server is not kept busy for a list nobody is looking at.
+  Snapshot and "What changed?" still fetch the complete list themselves, as before.
+- List pages are requested in parallel: after the first page, up to 8 pages in flight instead of one after another.
+  Measured against a Honcho on a NAS with one API worker, the server answers one request at a time, so 1, 4, 8 and
+  16 in flight give the same throughput (about 8 pages a second); the parallelism helps when the server has more
+  workers. Pages are 100 rows (the server maximum).
+- Messages tab: the session list can be sorted **Newest first** (default), **Oldest first** or by **Last activity**
+  (the time of the newest message). Honcho keeps no "last modified" on a session, so that time is read once per
+  session in the background and cached in `local/session-activity.json`; the tooltip shows both times. The choice
+  is remembered.
+- Messages tab: **Load all** next to **Load 50 more** fetches the rest of the conversation in one go.
+
 ## 0.1.6 (2026-10-11)
 
 - Conclusions table: columns can be resized by dragging their edges, moved by dragging their headers (the order

@@ -2,6 +2,7 @@
 import pytest
 from PySide6.QtCore import Qt
 
+from honcho_viewer import render
 from honcho_viewer.store import LocalStore
 from tests.conftest import wait_for
 from tests.fake_honcho import TOKEN
@@ -267,6 +268,48 @@ def test_messages_tab_loads_more_pages(on_alice):
     tab.more_btn.click()
 
     wait_for(lambda: "filler message 99" in tab.view.toPlainText())
+
+
+def test_messages_tab_load_all_fetches_the_whole_conversation(on_alice):
+    tab = on_alice.peer_view.messages
+    wait_for(lambda: tab.session_list.count() == 2)
+    _select(tab.session_list, "s2")
+    wait_for(lambda: "filler message 49" in tab.view.toPlainText())
+    assert tab.all_btn.isEnabled()
+
+    tab.all_btn.click()
+
+    wait_for(lambda: "filler message 119" in tab.view.toPlainText())
+    assert tab.count_label.text() == "120 of 120 messages"
+    assert not tab.more_btn.isEnabled() and not tab.all_btn.isEnabled()
+
+
+def test_sessions_sort_newest_oldest_and_last_activity(on_alice, tmp_path):
+    tab = on_alice.peer_view.messages
+    wait_for(lambda: tab.session_list.count() == 2)
+    ids = lambda: [tab.session_list.item(i).data(Qt.UserRole) for i in range(tab.session_list.count())]
+    assert ids() == ["s2", "s1"]  # newest first: s2 was created after s1
+
+    tab.sort_combo.setCurrentIndex(tab.sort_combo.findData("oldest"))
+    assert ids() == ["s1", "s2"]
+
+    tab.sort_combo.setCurrentIndex(tab.sort_combo.findData("activity"))
+    wait_for(lambda: on_alice.ctx.store.session_activity("test-qwen", "s2") is not None)
+    assert ids() == ["s2", "s1"]  # s2's newest message (10-05) is later than s1's (10-03)
+    assert render.short_time("2026-10-05T10:59:00Z") in tab.session_list.item(0).text()  # shown in local time
+    assert LocalStore(tmp_path).session_activity("test-qwen", "s1") == "2026-10-03T10:02:00Z"  # cached on disk
+    assert LocalStore(tmp_path).ui_value("sessions_sort") == "activity"
+
+
+def test_conclusions_show_the_first_page_while_the_rest_still_loads(window, fake):
+    _select(window.workspace_list, "big")
+    wait_for(lambda: window.peer_list.count() == 3)
+    _select(window.peer_list, "alice")
+    tab = window.peer_view.conclusions
+    wait_for(lambda: tab.table.rowCount() == 130)  # alice's own view: 100 at once, 30 appended by the second chunk
+    assert len(tab.rows) == 130 and not tab._loading
+    assert "130 conclusions" in tab.summary_label.text() and "loading" not in tab.summary_label.text()
+    assert tab.table.item(0, 2).text() == "[bulk] Alice fact 0: likes sailing"
 
 
 def test_ask_preview_and_answer(on_alice, fake):

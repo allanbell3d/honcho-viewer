@@ -63,8 +63,10 @@ class LocalStore:
         self.root = Path(root)
         self._settings_path = self.root / "settings.json"
         self._ratings_path = self.root / "ratings.json"
+        self._activity_path = self.root / "session-activity.json"
         self._settings = {**copy.deepcopy(_SETTINGS_DEFAULTS), **_read_json(self._settings_path, {})}
         self._ratings: dict[str, dict[str, dict]] = _read_json(self._ratings_path, {})
+        self._activity: dict[str, dict[str, str]] = _read_json(self._activity_path, {})
 
     # ---- connection & labels -------------------------------------------
     @property
@@ -96,6 +98,15 @@ class LocalStore:
     def set_ui_value(self, key: str, value) -> None:
         self._settings["ui"][key] = value
         _write_json(self._settings_path, self._settings)
+
+    # ---- session activity (time of the newest message, cached per workspace) ----
+    def session_activity(self, ws: str, session: str) -> str | None:
+        return self._activity.get(ws, {}).get(session)
+
+    def set_session_activity(self, ws: str, times: dict[str, str]) -> None:
+        if times:
+            self._activity.setdefault(ws, {}).update(times)
+            _write_json(self._activity_path, self._activity)
 
     # ---- ratings -------------------------------------------------------
     def rating(self, ws: str, conclusion_id: str) -> str | None:
