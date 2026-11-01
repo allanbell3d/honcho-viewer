@@ -41,9 +41,10 @@ KIND_FILTERS = (
     ("Questions", ("question",)),
     ("Summaries", ("summary",)),
     ("Messages and deletions", ("messages", "deletion")),
-    ("Other", ("context", "maintenance", "call", "other")),
+    ("Other", ("context", "maintenance", "rerank", "call", "other")),
 )
-OTHER_TIP = "Context reads by your agents, maintenance (vector sync) and stray model calls. Off by default: noisy."
+OTHER_TIP = ("Context reads by your agents, maintenance (vector sync), reranks outside a dream or question and stray "
+             "model calls. Off by default: noisy.")
 PERIODS = (("Last hour", 3600), ("Last 24 hours", 86400), ("Last 7 days", 7 * 86400), ("Last 30 days", 30 * 86400),
            ("All time", None), ("Custom…", "custom"))
 STATUS_COLOURS = {"ok": "#1a8a3a", "retried": "#b26a00", "partly failed": "#c62828", "failed": "#c62828",
@@ -94,6 +95,9 @@ def problems_text(job: Job) -> str:
         parts.append(job.final_error)
     if job.fallbacks:
         parts.append(f"{job.fallbacks} fallback")
+    if job.rerank_fallbacks:
+        parts.append(f"rerank {job.info.get('outcome')}" if job.kind == "rerank" and not job.final_error
+                     else f"{job.rerank_fallbacks} of {job.reranks} searches not reranked")
     if job.partly:
         parts.append("observer/specialist failed")
     return " · ".join(parts) or "–"
@@ -528,7 +532,9 @@ class HistoryView(QWidget):
         self.totals_label.setText(
             f"<b>{t['jobs']:,}</b> shown: {kinds or 'nothing'} &nbsp;|&nbsp; {failed}{partly}{incomplete} "
             f"&nbsp;|&nbsp; {compact(t['tokens_in'])} in / {compact(t['tokens_out'])} out tokens &nbsp;|&nbsp; "
-            f"conclusions +{t['created']:,} −{t['deleted']:,}")
+            f"conclusions +{t['created']:,} −{t['deleted']:,}"
+            + (f" &nbsp;|&nbsp; {t['reranks']:,} rerank calls, {t['rerank_fallbacks']:,} kept vector order"
+               if t["reranks"] else ""))
 
     def selected_job(self) -> Job | None:
         rows = self.table.selectionModel().selectedRows()
@@ -568,6 +574,8 @@ class HistoryView(QWidget):
             head.append(f"{job.calls} model call(s) · {job.tokens_in:,} in / {job.tokens_out:,} out tokens"
                         + (f" · {job.call_cached:,} cached" if job.call_cached else "")
                         + (f" · {job.embeddings} embedding call(s)" if job.embeddings else "")
+                        + (f" · {job.reranks} rerank call(s), {job.rerank_fallbacks} kept vector order"
+                           if job.reranks else "")
                         + (f" · {', '.join(map(e, job.models))}" if job.models else ""))
         if job.created or job.deleted:
             made = ", ".join(f"+{n} {e(level)}" for level, n in job.created.items())

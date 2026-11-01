@@ -154,3 +154,21 @@ def test_watch_adds_a_row_and_clear_removes_everything():
 
     state.clear()
     assert state.workspaces() == [] and state.totals()["workspaces"] == 0
+
+
+def test_reranks_are_counted_per_caller_and_only_fallbacks_are_listed():
+    state = MonitorState(clock=Clock())
+    base = {"provider": "voyage", "model": "rerank-2.5-lite", "daily_request_cap": 1000}
+    state.ingest([ev("rerank.call.completed", caller="dream", outcome="reranked", duration_ms=600, daily_requests=1,
+                     **base),
+                  ev("rerank.call.completed", caller="dream", outcome="timeout", duration_ms=3000, daily_requests=2,
+                     **base),
+                  ev("rerank.call.completed", caller="dialectic", outcome="skipped_cap", duration_ms=0, **base),
+                  ev("rerank.call.completed", caller="dialectic", outcome="empty_result", duration_ms=0, **base)])
+
+    row = state.snapshot()["w1"]
+    assert (row["reranks"], row["rerank_fallbacks"], row["rerank_failures"]) == (4, 2, 1)
+    dream = state.rerank_callers("w1")["dream"]
+    assert (dream["calls"], dream["reranked"], dream["fallbacks"], dream["ms"], dream["daily"]) == (2, 1, 1, 3600, 2)
+    assert [e["error"] for e in state.errors("w1")] == ["timeout"]  # skipped_cap is a choice, not an error
+    assert len(state.recent("w1")) == 2 and all("kept vector order" in text for _, text in state.recent("w1"))

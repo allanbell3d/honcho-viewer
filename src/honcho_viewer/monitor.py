@@ -10,6 +10,7 @@ Which events mean what (from Honcho's telemetry schema, every one carries ``work
 * ``dream.run`` / ``dream.specialist``   dreaming: a run, and each specialist's created/deleted conclusions
 * ``dialectic.completed``        a question answered
 * ``llm.call.completed``         every model call: purpose, model, tokens, outcome, error class, retries, fallback
+* ``rerank.call.completed``      every rerank of a search (rerank fork): caller, model, outcome, duration, daily count
 """
 from __future__ import annotations
 
@@ -17,6 +18,8 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
+
+from .telemetry import RERANK, RERANK_FAILURES, RERANK_NOT_NEEDED
 
 NO_WORKSPACE = "(no workspace)"
 ACTIVE_WITHIN_S = 15
@@ -47,6 +50,8 @@ class _Ws:
         self.errors = self.retries = self.fallbacks = 0
         self.models: dict[str, int] = {}
         self.purposes: dict[str, dict] = {}
+        self.reranks = self.rerank_fallbacks = self.rerank_failures = 0
+        self.rerank_callers: dict[str, dict] = {}
         self.call_times: deque[tuple[float, int]] = deque()  # (received_at, tokens) for the rate window
         self.recent: deque[tuple[float, str]] = deque(maxlen=recent)
         self.error_log: deque[dict] = deque(maxlen=50)
@@ -126,7 +131,9 @@ class MonitorState:
             line = None
         elif kind == "message.created":
             ws.messages_created += 1
-        if line is None and kind not in QUIET_TYPES and kind not in ("llm.call.completed", "message.created"):
+        elif kind == RERANK:
+            line = self._rerank(ws, data, stamp)
+        if line is None and kind not in QUIET_TYPES and kind not in ("llm.call.completed", "message.created", RERANK):
             line = kind
         if line:
             ws.recent.append((stamp, line))
@@ -155,6 +162,31 @@ class MonitorState:
             ws.recent.append((stamp, f"ERROR {purpose} on {data.get('model')}: "
                                      f"{data.get('error_class') or data.get('outcome')} (attempt {_n(data.get('attempt'))})"))
         ws.call_times.append((stamp, ins + outs))
+
+    def _rerank(self, ws: _Ws, data: dict, stamp: float) -> str | None:
+        """Count one rerank; only searches that kept the vector order get a line (reranks are high volume)."""
+        outcome = str(data.get("outcome") or "?")
+        caller = str(data.get("caller") or "other")
+        ws.reranks += 1
+        bucket = ws.rerank_callers.setdefault(caller, {"calls": 0, "reranked": 0, "fallbacks": 0, "ms": 0.0,
+                                                       "daily": None, "cap": None, "model": ""})
+        bucket["calls"] += 1
+        bucket["ms"] += data.get("duration_ms") if isinstance(data.get("duration_ms"), (int, float)) else 0
+        bucket["model"] = data.get("model") or bucket["model"]
+        if data.get("daily_requests") is not None:
+            bucket["daily"], bucket["cap"] = data.get("daily_requests"), data.get("daily_request_cap")
+        if outcome == "reranked":
+            bucket["reranked"] += 1
+            return None
+        if outcome in RERANK_NOT_NEEDED:
+            return None
+        ws.rerank_fallbacks += 1
+        bucket["fallbacks"] += 1
+        if outcome in RERANK_FAILURES:
+            ws.rerank_failures += 1
+            ws.error_log.append({"at": stamp, "what": f"rerank {caller}", "model": data.get("model") or "",
+                                 "error": outcome})
+        return f"rerank {caller} on {data.get('model')}: {outcome}, kept vector order"
 
     def set_queue(self, workspace: str, status: dict | None) -> None:
         """Queue status as returned by Honcho (``total_work_units`` etc.), or None if it could not be read."""
@@ -203,6 +235,7 @@ class MonitorState:
             "dream_created": ws.dream_created, "dream_deleted": ws.dream_deleted, "questions": ws.questions,
             "messages_created": ws.messages_created, "calls": ws.calls, "tokens_in": ws.tokens_in,
             "tokens_out": ws.tokens_out, "errors": ws.errors, "retries": ws.retries, "fallbacks": ws.fallbacks,
+            "reranks": ws.reranks, "rerank_fallbacks": ws.rerank_fallbacks, "rerank_failures": ws.rerank_failures,
             "calls_per_min": len(recent_calls), "tokens_per_min": sum(t for _, t in recent_calls),
             "models": sorted(ws.models, key=ws.models.get, reverse=True),
         }
@@ -234,6 +267,11 @@ class MonitorState:
         with self._lock:
             ws = self._ws.get(workspace)
             return {k: dict(v) for k, v in ws.purposes.items()} if ws else {}
+
+    def rerank_callers(self, workspace: str) -> dict[str, dict]:
+        with self._lock:
+            ws = self._ws.get(workspace)
+            return {k: dict(v) for k, v in ws.rerank_callers.items()} if ws else {}
 
     def errors(self, workspace: str) -> list[dict]:
         with self._lock:

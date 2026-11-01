@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.8 (2026-11-01)
+
+- Rerank telemetry (`rerank.call.completed`, from the Honcho rerank fork). History: a rerank with a `run_id` joins
+  its dream or question as a step (caller, provider and model, outcome, candidates → results, today's count / cap);
+  the job counts its rerank calls and the searches that kept the vector order ("2 of 30 searches not reranked" in
+  Problems). The job's status is unchanged, as rerank fails open. A rerank without a run is its own **rerank** row
+  under **Other**, failed only on `timeout`, `http_error`, `malformed_response` or `internal_error`; skips
+  (cap, cooldown, missing key…) show in Problems. Events without `workspace_name` (the fork before it added
+  workspace and run) land in **(no workspace)**. The totals line adds rerank calls and fallbacks.
+- Monitor: rerank calls per workspace. Problems shows "N/M not reranked"; the detail has a **Reranks by caller**
+  table (model, calls, reranked, fell back, average ms, today / cap). Only fallbacks get a feed line, and only real
+  failures go to Recent problems.
+
 ## 0.1.7 (2026-10-29)
 
 - Conclusions load lazily. The first 100 rows (newest first) are on screen after one request; the rest stream in

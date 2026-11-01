@@ -24,6 +24,11 @@ KEY_HEADER = "X-Telemetry-Key"
 MAX_BODY = 100 * 1024 * 1024  # a batch of full prompt/response traces can be tens of MB
 DEFAULT_LOG_CAP = 1024 ** 3  # 1 GB of logs, oldest day deleted first; 0 = unlimited
 DIALECTIC = "dialectic.completed"
+RERANK = "rerank.call.completed"
+# Rerank outcomes (fork's src/telemetry/events/rerank.py). Anything but "reranked" means the search kept the plain
+# vector order (fail open); these two are not problems: nothing to rerank, or the caller went away.
+RERANK_NOT_NEEDED = ("empty_result", "cancelled")
+RERANK_FAILURES = ("timeout", "http_error", "malformed_response", "internal_error")
 
 
 def extract_events(payload) -> list[dict]:

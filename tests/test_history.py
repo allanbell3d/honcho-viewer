@@ -220,3 +220,43 @@ def test_select_filters_by_peer_session_time_and_problems_and_totals_add_up():
     t = HistoryState.totals(h.select(WS))
     assert (t["jobs"], t["failed"], t["created"]) == (3, 1, 6)
     assert h.peers(WS) == ["alice", "bob"] and h.workspaces() == [WS]
+
+
+# ---- rerank (rerank fork) --------------------------------------------------------------------------------
+def rerank(t, outcome="reranked", **data):
+    return ev("rerank.call.completed", t, **{"caller": "dream", "provider": "voyage", "model": "rerank-2.5-lite",
+                                            "candidates_sent": 100, "results_returned": 10, "duration_ms": 700,
+                                            "tokens": 900, "billed_units": None, "daily_requests": 5,
+                                            "daily_request_cap": 1000, "outcome": outcome, **data})
+
+
+def test_rerank_calls_with_a_run_join_their_dream_and_count_fallbacks():
+    h = state(rerank(1, run_id="r1"), rerank(2, "timeout", run_id="r1"), rerank(3, "skipped_cap", run_id="r1"),
+              rerank(4, "empty_result", run_id="r1"),
+              ev("dream.run", 9, run_id="r1", dream_type="omni", total_input_tokens=1, total_output_tokens=1))
+
+    job = only(h, "dream")
+    assert (job.reranks, job.rerank_fallbacks, job.status) == (4, 2, "ok")  # fail open: the dream still worked
+    assert [s["ok"] for s in job.steps if s["type"] == "rerank.call.completed"] == [True, False, True, True]
+    assert "day 5/1000" in job.steps[0]["text"]
+    assert HistoryState.totals([job])["rerank_fallbacks"] == 2
+
+
+def test_rerank_caller_decides_the_job_kind_when_it_arrives_first():
+    h = state(rerank(1, run_id="q1", caller="prefetch"))
+    assert only(h, "question").reranks == 1
+
+
+def test_rerank_without_a_run_is_its_own_row_failed_only_on_a_real_failure():
+    h = state(rerank(1, caller="conclusions_api"), rerank(2, "http_error"), rerank(3, "skipped_cooldown"))
+
+    rows = {j.start: j for j in h.select(WS, {"rerank"})}
+    assert [rows[k].status for k in sorted(rows)] == ["ok", "failed", "ok"]
+    assert rows[max(rows)].rerank_fallbacks == 1 and rows[max(rows)].models == ["rerank-2.5-lite"]
+
+
+def test_rerank_without_a_workspace_goes_to_no_workspace():
+    event = rerank(1)
+    del event["data"]["workspace_name"]
+    h = state(event)
+    assert [j.kind for j in h.select("(no workspace)")] == ["rerank"]
