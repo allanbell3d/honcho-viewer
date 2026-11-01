@@ -74,3 +74,9 @@ LOAD_SNAPSHOT = ("Pick an earlier snapshot file of this peer to use as the 'befo
                  "this, the newest snapshot saved in the default folder is used.")
 SUPPORT = ("Searches the raw messages for text similar to this conclusion, so you can check "
            "whether it was really said.")
+
+SESSION_SORT = ("Order of the session list.\n"
+                "Newest / Oldest first: by the time the conversation started (its first message; for imported "
+                "chats this is the original date).\n"
+                "Last activity: by the time of the newest message. Honcho does not store it, so it is read once "
+                "per session and remembered in local/session-activity.json.")

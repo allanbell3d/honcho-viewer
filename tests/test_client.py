@@ -157,3 +157,33 @@ def test_chat_stream_is_still_limited_to_allowlisted_routes(client):
 
     with pytest.raises(ValueError):
         client._prepare("POST", "/v3/workspaces/{ws}/peers", {"ws": "x"})
+
+
+def test_stream_conclusions_yields_the_first_page_before_the_rest(client, fake):
+    chunks = list(client.stream_conclusions("big", None, None, None, lambda: True))
+
+    assert [(len(items), done, pages) for items, _total, done, pages in chunks] == [(100, 1, 2), (31, 2, 2)]
+    assert chunks[0][1] == 131
+
+
+def test_stream_conclusions_stops_when_the_caller_moved_on(client, fake):
+    chunks = list(client.stream_conclusions("big", None, None, None, lambda: False))
+
+    assert len(chunks) == 1  # page 1 is always delivered; nothing more was requested
+    assert [r["query"]["page"] for r in fake.requests if r["path"].endswith("conclusions/list")] == ["1"]
+
+
+def test_messages_rest_fetches_the_remaining_pages_in_order(client):
+    first = client.messages_page("test-qwen", "s2", page=1, size=50)
+    rest = client.messages_rest("test-qwen", "s2", after_page=1, pages=first["pages"], size=50)
+
+    assert first["pages"] == 3 and len(rest) == 70
+    assert [m["content"] for m in rest][:2] == ["filler message 50", "filler message 51"]
+    assert rest[-1]["content"] == "filler message 119"
+
+
+def test_sessions_last_activity_is_the_newest_message_time(client):
+    times = client.sessions_last_activity("test-qwen", ["s1", "s2"])
+
+    assert times["s1"] == "2026-10-03T10:02:00Z" and times["s2"] == "2026-10-05T10:59:00Z"
+

@@ -4,8 +4,7 @@ local/
 __pycache__/
 *.pyc
 .pytest_cache/
-.claude/settings.local.json
-.claude/
+.ruff_cache/
 .env
 build/
 dist/

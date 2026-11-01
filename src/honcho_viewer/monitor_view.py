@@ -31,8 +31,8 @@ COLUMNS = (
     ("LLM calls", "Model calls made, and how many in the last minute."),
     ("Tokens in / out", "Tokens sent to and produced by the models. Honcho can sample high-volume events; if it "
                         "does, these undercount."),
-    ("Problems", "Failed model calls, retries and fallbacks to another model, plus failed extraction observers and "
-                 "dream specialists."),
+    ("Problems", "Failed model calls, retries and fallbacks to another model, failed extraction observers and "
+                 "dream specialists, and searches that were not reranked (rerank skipped or failed)."),
     ("Model(s)", "Models seen in the calls, most used first."),
 )
 STATE_STYLE = {"active": ("● active", "#1a8a3a"), "stalled": ("● STALLED", "#c62828"), "idle": ("○ idle", "#777777"),
@@ -294,7 +294,7 @@ class MonitorView(QWidget):
             return False
         mode = self.filter_combo.currentData()
         problems = (r["errors"] + r["retries"] + r["fallbacks"] + r["extract_failed_observers"]
-                    + r["specialists_failed"])
+                    + r["specialists_failed"] + r["rerank_fallbacks"])
         if mode == "working":
             return (r["state"] in ("active", "stalled") or bool(r["queue_running"] or r["queue_waiting"])
                     or (r["age"] is not None and r["age"] < RECENT_S))
@@ -355,7 +355,9 @@ class MonitorView(QWidget):
             problems.append(f"{r['extract_failed_observers']} observer fail")
         if r["specialists_failed"]:
             problems.append(f"{r['specialists_failed']} specialist fail")
-        models = ", ".join(r["models"][:2]) + (f" +{len(r['models']) - 2}" if len(r["models"]) > 2 else "")
+        if r["rerank_fallbacks"]:
+            problems.append(f"{r['rerank_fallbacks']}/{r['reranks']} not reranked")
+        models =", ".join(r["models"][:2]) + (f" +{len(r['models']) - 2}" if len(r["models"]) > 2 else "")
         last = ago(r["age"]) + (f" · {r['last_kind']}" if r["last_kind"] and r["age"] is not None else "")
         return [self.ctx.ws_title(ws) if ws != NO_WORKSPACE else ws, STATE_STYLE[r["state"]][0], last,
                 queue_text(r), extraction, dreaming, str(r["questions"]) if r["questions"] else "–",
@@ -369,7 +371,8 @@ class MonitorView(QWidget):
         return [ws.lower(), (STATE_ORDER[r["state"]], ws.lower()), 1e12 if r["age"] is None else r["age"], pct,
                 r["extract_batches"],
                 r["dream_runs"] + r["specialists"], r["questions"], r["calls"], r["tokens_in"],
-                r["errors"] + r["retries"] + r["fallbacks"] + r["extract_failed_observers"] + r["specialists_failed"],
+                r["errors"] + r["retries"] + r["fallbacks"] + r["extract_failed_observers"] + r["specialists_failed"]
+                + r["rerank_fallbacks"],
                 (r["models"] or [""])[0]]
 
     def refresh(self) -> None:
@@ -461,6 +464,18 @@ class MonitorView(QWidget):
                 body.append(f"<tr><td>{render.esc(name)}</td><td align='right'>{b['calls']}</td>"
                             f"<td align='right'>{compact(b['in'])}</td><td align='right'>{compact(b['out'])}</td>"
                             f"<td align='right'>{b['errors'] or ''}</td></tr>")
+            body.append("</table>")
+        callers = self.monitor.rerank_callers(ws)
+        if callers:
+            body.append("<p><b>Reranks by caller</b> (searches that kept the vector order fell back)</p>"
+                        "<table cellpadding='3'><tr><th align='left'>caller</th><th align='left'>model</th>"
+                        "<th>calls</th><th>reranked</th><th>fell back</th><th>avg ms</th><th>today / cap</th></tr>")
+            for name, b in sorted(callers.items(), key=lambda kv: -kv[1]["calls"]):
+                today = "" if b["daily"] is None else f"{b['daily']} / {b['cap'] if b['cap'] else '∞'}"
+                body.append(f"<tr><td>{render.esc(name)}</td><td>{render.esc(b['model'])}</td>"
+                            f"<td align='right'>{b['calls']}</td><td align='right'>{b['reranked']}</td>"
+                            f"<td align='right'>{b['fallbacks'] or ''}</td>"
+                            f"<td align='right'>{b['ms'] / b['calls']:.0f}</td><td align='right'>{today}</td></tr>")
             body.append("</table>")
         errors = self.monitor.errors(ws)
         if errors:

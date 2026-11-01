@@ -147,7 +147,7 @@ class FakeHoncho:
             case ("POST", ["v3", "workspaces", _, "peers", peer, "sessions"]):
                 rows = [
                     {"id": sid, "is_active": True, "workspace_id": seg[2], "metadata": {},
-                     "configuration": {}, "created_at": _ts(0)}
+                     "configuration": {}, "created_at": s["messages"][0]["created_at"] if sid == "s1" else _ts(1)}
                     for sid, s in ws["sessions"].items() if peer in s["peers"]
                 ]
                 return self._page(rows, query)

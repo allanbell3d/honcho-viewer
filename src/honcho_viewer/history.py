@@ -13,13 +13,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .telemetry import extract_events
+from .telemetry import RERANK, RERANK_FAILURES, RERANK_NOT_NEEDED, extract_events
 
 JOB_KINDS = ("extraction", "dream", "question", "summary")
-EVENT_KINDS = ("messages", "deletion", "context", "maintenance", "call", "other")
+EVENT_KINDS = ("messages", "deletion", "context", "maintenance", "rerank", "call", "other")
 KIND_TITLES = {"extraction": "extraction", "dream": "dream", "question": "question", "summary": "summary",
                "messages": "messages", "deletion": "deletion", "context": "context read",
-               "maintenance": "maintenance", "call": "model call", "other": "event"}
+               "maintenance": "maintenance", "rerank": "rerank", "call": "model call", "other": "event"}
+_RERANK_CATEGORY = {"dream": "dream", "dialectic": "dialectic", "prefetch": "dialectic"}  # caller -> run category
 NO_WORKSPACE = "(no workspace)"
 SKIP_TYPES = ("trace.content",)  # prompt/answer text: most of the bytes, not needed for the timeline
 _DROP_FIELDS = {"client", "honcho_version", "output_signatures", "input_message_refs", "output_tool_calls",
@@ -125,6 +126,8 @@ class Job:
     errors: int = 0
     retries: int = 0
     fallbacks: int = 0
+    reranks: int = 0
+    rerank_fallbacks: int = 0  # searches that kept the vector order (skipped or failed rerank)
     final_error: str = ""
     done: bool = False
     partly: bool = False
@@ -252,7 +255,8 @@ class HistoryState:
             return
         run_id = data.get("run_id")
         if run_id:
-            category = data.get("parent_category")
+            category = data.get("parent_category") or (_RERANK_CATEGORY.get(data.get("caller"))
+                                                       if kind == RERANK else None)
             job_kind = ("question" if kind == "dialectic.completed" or category == "dialectic" else
                         "dream" if kind.startswith("dream.") or category == "dream" else
                         "extraction" if category == "representation" else
@@ -282,7 +286,7 @@ class HistoryState:
             return
         else:
             job_kind = ("messages" if kind == "message.created" else "deletion" if kind.startswith("deletion.") else
-                        "context" if kind == "context.retrieved" else
+                        "context" if kind == "context.retrieved" else "rerank" if kind == RERANK else
                         "maintenance" if kind.startswith("reconciliation.") else "other")
             self._apply(self._job(f"evt:{event.get('id') or (kind, stamp)}", job_kind), kind, data, stamp)
 
@@ -391,6 +395,25 @@ class HistoryState:
                 step["text"] = f"✗ embedding · {data.get('error_class') or 'error'}"
             else:
                 return  # many per job; counted, not listed
+        elif kind == RERANK:
+            outcome = str(data.get("outcome") or "?")
+            job.reranks += 1
+            if outcome != "reranked" and outcome not in RERANK_NOT_NEEDED:
+                job.rerank_fallbacks += 1
+            failed = outcome in RERANK_FAILURES
+            if job.kind == "rerank":  # a search outside any run: the event is the whole job
+                job.failed_event = failed
+                job.final_error = outcome if failed else ""
+                job.info.update(_compact(data))
+                model = data.get("model")
+                if model and model not in job.models:
+                    job.models.append(model)
+            step["ok"] = not failed
+            daily, cap = data.get("daily_requests"), data.get("daily_request_cap")
+            step["text"] = (f"{'✗ ' if failed else ''}rerank · {data.get('caller') or '?'} · "
+                            f"{data.get('provider') or '?'} {data.get('model') or '?'} · {outcome} · "
+                            f"{_n(data.get('candidates_sent'))} → {_n(data.get('results_returned'))}"
+                            + (f" · day {daily}/{cap or '∞'}" if daily is not None else ""))
         elif kind == "agent.iteration":
             tools = data.get("tool_calls") or []
             step["text"] = (f"iteration {data.get('iteration')} · {_n(data.get('input_tokens'))} in / "
@@ -495,8 +518,10 @@ class HistoryState:
     @staticmethod
     def totals(jobs: list[Job]) -> dict:
         t = {"jobs": len(jobs), "failed": 0, "partly": 0, "incomplete": 0, "tokens_in": 0, "tokens_out": 0,
-             "created": 0, "deleted": 0, "by_kind": {}}
+             "created": 0, "deleted": 0, "reranks": 0, "rerank_fallbacks": 0, "by_kind": {}}
         for j in jobs:
+            t["reranks"] += j.reranks
+            t["rerank_fallbacks"] += j.rerank_fallbacks
             t["by_kind"][j.kind] = t["by_kind"].get(j.kind, 0) + 1
             status = j.status
             t["failed"] += status == "failed"

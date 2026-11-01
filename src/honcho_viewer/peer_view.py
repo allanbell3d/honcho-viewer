@@ -5,7 +5,7 @@ import json
 import time
 from html import escape
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
                                QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit,
@@ -29,6 +29,11 @@ def _group(title: str, widget: QWidget, tooltip: str = "") -> QGroupBox:
 
 def _peer_items(peers: list[str], first: str, exclude: str | None = None) -> list[tuple[str, str | None]]:
     return [(first, None)] + [(p, p) for p in peers if p != exclude]
+
+
+class _Progress(QObject):
+    """Carries partial results from a worker thread to the GUI thread (queued signal)."""
+    chunk = Signal(object)
 
 
 class _PeerTab(QWidget):
@@ -116,6 +121,9 @@ class ConclusionsTab(_PeerTab):
         super().__init__(ctx)
         self.rows: list[dict] = []
         self._detail: dict | None = None
+        self._loading = False  # a streamed load is still adding rows
+        self._progress = _Progress()
+        self._progress.chunk.connect(self._on_chunk)
 
         self.observer_combo = tip(QComboBox(), "By (observer): whose memory this is. Default: the peer itself (Honcho's own "
                                                "view). Agents with 'observe others' keep their own copy of every fact "
@@ -233,29 +241,57 @@ class ConclusionsTab(_PeerTab):
 
     # -- loading & table
     def load(self) -> None:
+        """Stream the conclusions: the first page is on screen at once, the rest arrive in the background
+        (STREAM_CHUNK_PAGES at a time) and are appended; the summary shows the progress. Changing the
+        filters or the peer abandons the running load (its remaining pages are never requested)."""
         if not self.ws:
             return
         ws = self.ws
         observer, observed = self.observer_combo.currentData(), self.about_combo.currentData()
         level = self.level_combo.currentData()
-        self.summary_label.setText("Loading…")
-        self._update_snapshot_label()
-        self.ctx.call(lambda c: c.list_conclusions(ws, observer, observed, level), self._show,
-                      self.latest.ticket("list"))
-
-    def _show(self, rows: list[dict]) -> None:
-        self.rows = rows
+        self.rows, self._detail, self._loading = [], None, True
         self._fill_table()
-        self._detail = None
+        self.summary_label.setText("Loading…")
         self.detail.setHtml(render.placeholder("Select a conclusion to see where it came from."))
+        self._update_snapshot_label()
+        current = self.latest.ticket("list")
+        progress = self._progress
+
+        def fetch(c):
+            for items, total, done, pages in c.stream_conclusions(ws, observer, observed, level, current):
+                progress.chunk.emit((current, items, total, done, pages))
+
+        self.ctx.call(fetch, lambda _r: None, current, on_error=lambda _e: self._finish_load(current))
+
+    def _on_chunk(self, payload) -> None:
+        current, items, total, done, pages = payload
+        if not current():
+            return
+        self.rows.extend(items)
+        self._append_rows(items)
+        if done >= pages:
+            self._finish_load(current)
+        else:
+            self._update_summary(f"loading {len(self.rows):,} of {total:,} (page {done} of {pages})…")
+
+    def _finish_load(self, current) -> None:
+        if not current():
+            return
+        self._loading = False
+        if self._sort:  # rows arrived in Honcho's order; apply the chosen sort once, now that all are here
+            self._fill_table()
+        else:
+            self._update_summary()
+
+    def _passes_filter(self, c: dict) -> bool:
+        text = self.text_filter.text().strip().lower()
+        if text and text not in (c.get("content") or "").lower():
+            return False
+        return not (self.unrated_only.isChecked() and self.ctx.store.rating(self.ws, c["id"]))
 
     def _visible_rows(self) -> list[dict]:
-        text = self.text_filter.text().strip().lower()
-        unrated = self.unrated_only.isChecked()
-        rows = [c for c in self.rows
-                if (not text or text in (c.get("content") or "").lower())
-                and not (unrated and self.ctx.store.rating(self.ws, c["id"]))]
-        if self._sort:
+        rows = [c for c in self.rows if self._passes_filter(c)]
+        if self._sort and not self._loading:
             column, order = self._sort
             rows.sort(key=lambda c: self._sort_value(c, column), reverse=order == Qt.DescendingOrder)
         return rows
@@ -282,23 +318,42 @@ class ConclusionsTab(_PeerTab):
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
         for r, c in enumerate(rows):
-            level = c.get("level", "")
-            self.table.setItem(r, 0, self._mark_item(c))
-            cells = (explain.LEVELS.get(level, (level,))[0], c.get("content") or "",
-                     f"{c.get('observer_id')} → {c.get('observed_id')}", c.get("session_id") or "–",
-                     render.short_time(c.get("created_at")))
-            for col, text in enumerate(cells, start=1):
-                item = QTableWidgetItem(text)
-                if col == 1:
-                    item.setForeground(QColor(render.LEVEL_COLORS.get(level, "#888")))
-                    item.setToolTip(explain.LEVELS.get(level, ("", ""))[1])
-                elif col == 2:
-                    item.setToolTip(text)
-                self.table.setItem(r, col, item)
+            self._set_row(r, c)
         self.table.blockSignals(False)
         self._fit_columns()
         self._fit_rows()
         self._update_summary()
+
+    def _append_rows(self, new: list[dict]) -> None:
+        """Add newly arrived rows below the existing ones (filter applied, Honcho's order kept)."""
+        rows = [c for c in new if self._passes_filter(c)]
+        if not rows:
+            return
+        start = self.table.rowCount()
+        self.table.blockSignals(True)
+        self.table.setRowCount(start + len(rows))
+        for r, c in enumerate(rows, start=start):
+            self._set_row(r, c)
+            if self.table.wordWrap():
+                self.table.resizeRowToContents(r)
+        self.table.blockSignals(False)
+        if start == 0:
+            self._fit_columns()
+
+    def _set_row(self, r: int, c: dict) -> None:
+        level = c.get("level", "")
+        self.table.setItem(r, 0, self._mark_item(c))
+        cells = (explain.LEVELS.get(level, (level,))[0], c.get("content") or "",
+                 f"{c.get('observer_id')} → {c.get('observed_id')}", c.get("session_id") or "–",
+                 render.short_time(c.get("created_at")))
+        for col, text in enumerate(cells, start=1):
+            item = QTableWidgetItem(text)
+            if col == 1:
+                item.setForeground(QColor(render.LEVEL_COLORS.get(level, "#888")))
+                item.setToolTip(explain.LEVELS.get(level, ("", ""))[1])
+            elif col == 2:
+                item.setToolTip(text)
+            self.table.setItem(r, col, item)
 
     # -- columns: resize, wrap, sort, move
     def _fit_columns(self, measure: bool = True) -> None:
@@ -346,7 +401,8 @@ class ConclusionsTab(_PeerTab):
         header = self.table.horizontalHeader()
         header.setSortIndicatorShown(True)
         header.setSortIndicator(column, order)
-        self._fill_table()
+        if not self._loading:  # while loading, rows arrive in Honcho's order; the sort is applied at the end
+            self._fill_table()
 
     def _save_order(self, *_args) -> None:
         header = self.table.horizontalHeader()
@@ -376,14 +432,15 @@ class ConclusionsTab(_PeerTab):
         elif chosen is reset:
             self.reset_order()
 
-    def _update_summary(self) -> None:
+    def _update_summary(self, progress: str = "") -> None:
         n = len(self.rows)
         from_messages = sum(1 for c in self.rows if c.get("level") == "explicit")
         acc = self.ctx.store.accuracy(self.ws, ids={c["id"] for c in self.rows})
         pct = f"{acc.percent}%" if acc.percent is not None else "–"
         self.summary_label.setText(
             f"{n:,} conclusions: {from_messages:,} from messages, {n - from_messages:,} from dreaming  ·  "
-            f"rated {acc.rated} (✓{acc.correct} ×{acc.wrong} ?{acc.unsure})  ·  accuracy {pct}")
+            f"rated {acc.rated} (✓{acc.correct} ×{acc.wrong} ?{acc.unsure})  ·  accuracy {pct}"
+            + (f"  ·  {progress}" if progress else ""))
 
     def current_conclusion(self) -> dict | None:
         row = self.table.currentRow()
@@ -537,6 +594,13 @@ class MessagesTab(_PeerTab):
         self._session: str | None = None
         self._messages: list[dict] = []
         self._page = 0
+        self._pages = 1
+        self._sessions: list[dict] = []
+        self.sort_combo = tip(QComboBox(), explain.SESSION_SORT)
+        for label, key in (("Newest first", "newest"), ("Oldest first", "oldest"), ("Last activity", "activity")):
+            self.sort_combo.addItem(label, key)
+        self.sort_combo.setCurrentIndex(max(0, self.sort_combo.findData(ctx.store.ui_value("sessions_sort", "newest"))))
+        self.sort_combo.currentIndexChanged.connect(self._sort_changed)
         self.session_list = tip(QListWidget(), "Sessions (conversations) this peer took part in.")
         self.session_list.currentItemChanged.connect(self._open_session)
         self.view = HtmlView()
@@ -544,6 +608,9 @@ class MessagesTab(_PeerTab):
         self.more_btn = QPushButton("Load 50 more")
         self.more_btn.setEnabled(False)
         self.more_btn.clicked.connect(self._fetch)
+        self.all_btn = tip(QPushButton("Load all"), "Fetch the rest of this conversation in one go.")
+        self.all_btn.setEnabled(False)
+        self.all_btn.clicked.connect(self._fetch_all)
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -553,9 +620,18 @@ class MessagesTab(_PeerTab):
         row.addWidget(self.count_label)
         row.addStretch()
         row.addWidget(self.more_btn)
+        row.addWidget(self.all_btn)
         right_layout.addLayout(row)
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        sort_row = QHBoxLayout()
+        sort_row.addWidget(QLabel("Sort:"))
+        sort_row.addWidget(self.sort_combo, 1)
+        left_layout.addLayout(sort_row)
+        left_layout.addWidget(self.session_list)
         split = QSplitter(Qt.Horizontal)
-        split.addWidget(self.session_list)
+        split.addWidget(left)
         split.addWidget(right)
         split.setSizes([200, 760])
         layout = QVBoxLayout(self)
@@ -571,38 +647,88 @@ class MessagesTab(_PeerTab):
         self.ctx.call(lambda c: c.peer_sessions(ws, peer), self._show_sessions, self.latest.ticket("sessions"))
 
     def _show_sessions(self, sessions: list[dict]) -> None:
+        self._sessions = sessions
+        self.sessions_loaded.emit([s["id"] for s in sessions])
+        if not sessions:
+            self.view.setHtml(render.placeholder("This peer has no sessions."))
+        self._list_sessions(select_first=True)
+
+    def _sort_changed(self) -> None:
+        self.ctx.store.set_ui_value("sessions_sort", self.sort_combo.currentData())
+        self._list_sessions()
+
+    def _list_sessions(self, select_first: bool = False) -> None:
+        """Fill the list in the chosen order. 'Last activity' needs the time of each session's newest message,
+        which Honcho does not keep on the session: it is read from the local cache (local/session-activity.json)
+        and fetched in the background for sessions not cached yet, then the list is re-sorted."""
+        ws, mode = self.ws, self.sort_combo.currentData()
+        store = self.ctx.store
+        selected = self._session if not select_first else None
+        sessions = list(self._sessions)
+        if mode == "activity":
+            sessions.sort(key=lambda s: store.session_activity(ws, s["id"]) or s.get("created_at") or "", reverse=True)
+        else:
+            sessions.sort(key=lambda s: s.get("created_at") or "", reverse=mode == "newest")
         self.session_list.blockSignals(True)
         self.session_list.clear()
         for s in sessions:
-            item = QListWidgetItem(f"{s['id']}   {render.short_time(s.get('created_at'))}")
+            last = store.session_activity(ws, s["id"])
+            shown = last if mode == "activity" and last else s.get("created_at")
+            item = QListWidgetItem(f"{s['id']}   {render.short_time(shown)}")
             item.setData(Qt.UserRole, s["id"])
-            item.setToolTip(json.dumps({k: s.get(k) for k in ("metadata", "configuration", "is_active")},
+            item.setToolTip(json.dumps({"started": s.get("created_at"), "last activity": last or "(not fetched yet)",
+                                        **{k: s.get(k) for k in ("metadata", "configuration", "is_active")}},
                                        indent=2, ensure_ascii=False))
             self.session_list.addItem(item)
+            if s["id"] == selected:
+                self.session_list.setCurrentItem(item)
         self.session_list.blockSignals(False)
-        self.sessions_loaded.emit([s["id"] for s in sessions])
-        if sessions:
+        if select_first and sessions:
             self.session_list.setCurrentRow(0)
-        else:
-            self.view.setHtml(render.placeholder("This peer has no sessions."))
+        if mode == "activity":
+            missing = [s["id"] for s in sessions if not store.session_activity(ws, s["id"])]
+            if missing:
+                self.ctx.status.emit(f"Fetching the last activity of {len(missing)} sessions…")
+                self.ctx.call(lambda c: c.sessions_last_activity(ws, missing), self._activity_fetched,
+                              self.latest.ticket("activity"))
+
+    def _activity_fetched(self, times: dict[str, str]) -> None:
+        self.ctx.store.set_session_activity(self.ws, times)
+        self.ctx.status.emit(f"Last activity known for {len(times)} more sessions.")
+        if self.sort_combo.currentData() == "activity":
+            self._list_sessions()
 
     def _open_session(self, current, _previous=None) -> None:
         if current is None:
             return
-        self._session, self._messages, self._page = current.data(Qt.UserRole), [], 0
+        self._session, self._messages, self._page, self._pages = current.data(Qt.UserRole), [], 0, 1
         self._fetch()
 
     def _fetch(self) -> None:
         ws, sid, page = self.ws, self._session, self._page + 1
         self.more_btn.setEnabled(False)
+        self.all_btn.setEnabled(False)
         self.ctx.call(lambda c: c.messages_page(ws, sid, page), self._add_page, self.latest.ticket("messages"))
+
+    def _fetch_all(self) -> None:
+        ws, sid, after, pages = self.ws, self._session, self._page, self._pages
+        self.more_btn.setEnabled(False)
+        self.all_btn.setEnabled(False)
+        self.count_label.setText(f"Loading all {pages} pages…")
+        self.ctx.call(lambda c: c.messages_rest(ws, sid, after, pages),
+                      lambda items: self._add_page({"items": items, "page": pages, "pages": pages}),
+                      self.latest.ticket("messages"))
 
     def _add_page(self, data: dict) -> None:
         self._page = data.get("page", self._page + 1)
+        self._pages = data.get("pages") or self._pages
         self._messages += data.get("items", [])
         self.view.setHtml(render.messages_html(self._messages))
-        self.count_label.setText(f"{len(self._messages)} of {data.get('total', '?')} messages")
-        self.more_btn.setEnabled(self._page < (data.get("pages") or 1))
+        total = data.get("total") or (len(self._messages) if self._page >= self._pages else "?")
+        self.count_label.setText(f"{len(self._messages)} of {total} messages")
+        more = self._page < self._pages
+        self.more_btn.setEnabled(more)
+        self.all_btn.setEnabled(more)
 
 
 # ---- Ask ----------------------------------------------------------------------
