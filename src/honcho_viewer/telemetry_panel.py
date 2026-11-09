@@ -22,7 +22,7 @@ class TelemetryPanel(QWidget):
                             "Optional shared secret. If set, Honcho must send it in the X-Telemetry-Key header, "
                             "otherwise the post is rejected.")
         self.allowed_edit = tip(QLineEdit(ctx.store.ui_value("telemetry_allowed", ""),
-                                          placeholderText="anyone (or e.g. 192.168.1.22)"),
+                                          placeholderText="anyone (or e.g. 192.0.2.10)"),
                                 "Only accept posts from these sender IP addresses (comma separated), e.g. your "
                                 "Honcho server. Empty = anyone who can reach the port.")
         self.listen_btn = tip(QPushButton("Start listening"),

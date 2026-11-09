@@ -133,12 +133,12 @@ def test_log_prunes_oldest_days_past_the_cap_but_never_the_current_one(tmp_path)
 
 
 def test_parse_allowed_accepts_commas_spaces_and_blank():
-    assert parse_allowed("192.168.1.22, 10.0.0.5;  ::1") == {"192.168.1.22", "10.0.0.5", "::1"}
+    assert parse_allowed("192.0.2.10, 198.51.100.5;  ::1") == {"192.0.2.10", "198.51.100.5", "::1"}
     assert parse_allowed("  ") == frozenset()
 
 
 def test_receiver_only_accepts_listed_sender_addresses(tmp_path):
-    blocked = TelemetryReceiver(TelemetryStore(), allowed=frozenset({"192.168.200.200"}))
+    blocked = TelemetryReceiver(TelemetryStore(), allowed=frozenset({"203.0.113.200"}))
     blocked.start(0, host="127.0.0.1")
     open_to_loopback = TelemetryReceiver(TelemetryStore(), allowed=frozenset({"127.0.0.1"}))
     open_to_loopback.start(0, host="127.0.0.1")

@@ -64,6 +64,12 @@ class MainWindow(QMainWindow):
         self.ws_info.setWordWrap(True)
         self.peer_list = tip(QListWidget(), "A peer is any participant Honcho remembers: a user, an agent, …")
         self.peer_list.currentItemChanged.connect(self._on_peer)
+        self.hide_off = tip(QCheckBox("Hide peers with reasoning off"),
+                            "Hides peers whose configuration has observe_me off (Honcho writes no conclusions about them, "
+                            "e.g. tenants). Their messages are still stored.")
+        self.hide_off.setChecked(self.ctx.hide_reasoning_off)
+        self.hide_off.toggled.connect(self.ctx.set_hide_reasoning_off)
+        self.ctx.peer_filter_changed.connect(self._apply_hide_off)
         self.peer_view = PeerView(self.ctx)
 
         left = QWidget()
@@ -75,6 +81,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.label_edit)
         left_layout.addWidget(self.ws_info)
         left_layout.addWidget(QLabel("<b>Peers</b>"))
+        left_layout.addWidget(self.hide_off)
         left_layout.addWidget(self.peer_list, 3)
         explore = QSplitter(Qt.Horizontal)
         explore.addWidget(left)
@@ -163,7 +170,7 @@ class MainWindow(QMainWindow):
                       lambda q: self.ws_info.setText(f"Processing queue: {render.queue_text(q)}"), ok)
 
     def _show_peers(self, ws: str, peers: list[dict]) -> None:
-        self.ctx.peers_cache[ws] = [p["id"] for p in peers]
+        self.ctx.note_peers(ws, peers)
         self.peer_list.blockSignals(True)
         self.peer_list.clear()
         for p in peers:
@@ -173,13 +180,34 @@ class MainWindow(QMainWindow):
                                        indent=2, ensure_ascii=False))
             self.peer_list.addItem(item)
         self.peer_list.blockSignals(False)
+        self._apply_hide_off()
+
+    def _apply_hide_off(self) -> None:
+        """Hide reasoning-off peers in this list; close the open peer if it is now hidden, else refresh its pickers."""
+        ws_item = self.workspace_list.currentItem()
+        ws = ws_item.data(Qt.UserRole) if ws_item else None
+        shown = set(self.ctx.visible_peers(ws, self.ctx.peers_cache.get(ws, []))) if ws else set()
+        for i in range(self.peer_list.count()):
+            item = self.peer_list.item(i)
+            item.setHidden(item.data(Qt.UserRole) not in shown)
+        hidden = self.peer_list.count() - len(shown)
+        self.hide_off.setText("Hide peers with reasoning off" + (f" ({hidden} hidden)" if hidden > 0 else ""))
+        current = self.peer_list.currentItem()
+        if current is None or not self.ctx.reasoning_off.get(ws):
+            return  # nothing open, or no reasoning-off peers: the open peer's pickers are already right
+        if current.isHidden():
+            self.peer_list.setCurrentRow(-1)
+            self.peer_view.clear()
+        else:
+            self._on_peer(current)
 
     def _on_peer(self, current, _previous=None) -> None:
         ws_item = self.workspace_list.currentItem()
         if current is None or ws_item is None:
             return
         ws = ws_item.data(Qt.UserRole)
-        self.peer_view.set_peer(ws, current.data(Qt.UserRole), self.ctx.peers_cache.get(ws, []))
+        peers = self.ctx.visible_peers(ws, self.ctx.peers_cache.get(ws, []))
+        self.peer_view.set_peer(ws, current.data(Qt.UserRole), peers)
 
     def _save_label(self) -> None:
         item = self.workspace_list.currentItem()

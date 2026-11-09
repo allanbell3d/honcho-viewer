@@ -146,7 +146,7 @@ class EventLog:
 
 
 def parse_allowed(text: str) -> frozenset[str]:
-    """'192.168.1.22, 10.0.0.5' -> {'192.168.1.22', '10.0.0.5'} (commas, spaces or semicolons)."""
+    """'192.0.2.10, 198.51.100.5' -> {'192.0.2.10', '198.51.100.5'} (commas, spaces or semicolons)."""
     return frozenset(p for p in text.replace(",", " ").replace(";", " ").split() if p)
 
 

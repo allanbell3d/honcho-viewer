@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.9 (2026-11-10)
+
+- Messages tab: **Filter sessions** narrows the session list to sessions whose name or details (metadata,
+  configuration) contain every typed word; done on this PC, nothing is sent to the server. A search box finds the
+  peer's messages across all sessions (Honcho's search, closest first, up to 100); clearing it returns to the open
+  session.
+- Peers: **Hide peers with reasoning off** (on by default, remembered) hides peers whose configuration has
+  `observe_me` off, so Honcho writes no conclusions about them. It applies to the peer list and to every peer
+  picker, including Compare; the checkbox shows how many are hidden. If the open peer becomes hidden, it is closed.
+- Telemetry examples, placeholders and tests use documentation-range IP addresses (192.0.2.0/24, 198.51.100.0/24,
+  203.0.113.0/24) instead of private-network ones.
+- Unused imports removed.
+
 ## 0.1.8 (2026-11-01)
 
 - Rerank telemetry (`rerank.call.completed`, from the Honcho rerank fork). History: a rerank with a `run_id` joins

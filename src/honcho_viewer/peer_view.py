@@ -586,6 +586,9 @@ class ConclusionsTab(_PeerTab):
 
 
 # ---- Messages ---------------------------------------------------------------
+SEARCH_LIMIT = 100  # the most Honcho's search returns
+
+
 class MessagesTab(_PeerTab):
     sessions_loaded = Signal(list)
 
@@ -603,6 +606,15 @@ class MessagesTab(_PeerTab):
         self.sort_combo.currentIndexChanged.connect(self._sort_changed)
         self.session_list = tip(QListWidget(), "Sessions (conversations) this peer took part in.")
         self.session_list.currentItemChanged.connect(self._open_session)
+        self.session_filter = tip(QLineEdit(), explain.SESSION_FILTER)
+        self.session_filter.setPlaceholderText("Filter sessions")
+        self.session_filter.setClearButtonEnabled(True)
+        self.session_filter.textChanged.connect(self._filter_sessions)
+        self.search_box = tip(QLineEdit(), explain.MESSAGE_SEARCH)
+        self.search_box.setPlaceholderText("Search this peer's messages, press Enter")
+        self.search_box.setClearButtonEnabled(True)
+        self.search_box.returnPressed.connect(self._search)
+        self.search_box.textChanged.connect(self._search_cleared)
         self.view = HtmlView()
         self.count_label = QLabel()
         self.more_btn = QPushButton("Load 50 more")
@@ -615,6 +627,7 @@ class MessagesTab(_PeerTab):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(self.search_box)
         right_layout.addWidget(self.view)
         row = QHBoxLayout()
         row.addWidget(self.count_label)
@@ -629,6 +642,7 @@ class MessagesTab(_PeerTab):
         sort_row.addWidget(QLabel("Sort:"))
         sort_row.addWidget(self.sort_combo, 1)
         left_layout.addLayout(sort_row)
+        left_layout.addWidget(self.session_filter)
         left_layout.addWidget(self.session_list)
         split = QSplitter(Qt.Horizontal)
         split.addWidget(left)
@@ -643,6 +657,7 @@ class MessagesTab(_PeerTab):
             return
         ws, peer = self.ws, self.peer
         self.session_list.clear()
+        self.search_box.clear()  # after the list: clearing a search reopens the current session, and there is none
         self.view.setHtml(render.placeholder("Loading sessions…"))
         self.ctx.call(lambda c: c.peer_sessions(ws, peer), self._show_sessions, self.latest.ticket("sessions"))
 
@@ -683,6 +698,7 @@ class MessagesTab(_PeerTab):
             if s["id"] == selected:
                 self.session_list.setCurrentItem(item)
         self.session_list.blockSignals(False)
+        self._filter_sessions(self.session_filter.text())
         if select_first and sessions:
             self.session_list.setCurrentRow(0)
         if mode == "activity":
@@ -729,6 +745,33 @@ class MessagesTab(_PeerTab):
         more = self._page < self._pages
         self.more_btn.setEnabled(more)
         self.all_btn.setEnabled(more)
+
+    def _search(self) -> None:
+        query = self.search_box.text().strip()
+        if not query or not self.ws:
+            return
+        ws, peer = self.ws, self.peer
+        self.more_btn.setEnabled(False)
+        self.all_btn.setEnabled(False)
+        self.count_label.setText("Searching…")
+        self.ctx.call(lambda c: c.search_messages(ws, query, peer_id=peer, limit=SEARCH_LIMIT),
+                      self._show_search, self.latest.ticket("messages"))
+
+    def _show_search(self, rows: list[dict]) -> None:
+        self.view.setHtml(render.messages_html(rows) if rows else render.placeholder("No messages found."))
+        self.count_label.setText(f"{len(rows)} found" + (f", the {SEARCH_LIMIT} closest" if len(rows) >= SEARCH_LIMIT else ""))
+
+    def _filter_sessions(self, text: str) -> None:
+        """Hide sessions whose name and details (the tooltip: metadata, configuration) lack every typed word."""
+        words = text.lower().split()
+        for i in range(self.session_list.count()):
+            item = self.session_list.item(i)
+            haystack = f"{item.text()} {item.toolTip()}".lower()
+            item.setHidden(not all(w in haystack for w in words))
+
+    def _search_cleared(self, text: str) -> None:
+        if not text and self.session_list.currentItem() is not None:
+            self._open_session(self.session_list.currentItem())
 
 
 # ---- Ask ----------------------------------------------------------------------
