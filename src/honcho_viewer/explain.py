@@ -75,6 +75,11 @@ LOAD_SNAPSHOT = ("Pick an earlier snapshot file of this peer to use as the 'befo
 SUPPORT = ("Searches the raw messages for text similar to this conclusion, so you can check "
            "whether it was really said.")
 
+SESSION_FILTER = ("Shows only sessions whose name or details (metadata, settings) contain every word you type. "
+                  "Instant, done on this PC; nothing is sent to the server.")
+MESSAGE_SEARCH = ("Finds this peer's messages across all sessions, closest match first (up to 100). "
+                  "Honcho searches by meaning as well as by words, so it is not an exact text match. "
+                  "Each result shows its session. Clear the box to return to the open session.")
 SESSION_SORT = ("Order of the session list.\n"
                 "Newest / Oldest first: by the time the conversation started (its first message; for imported "
                 "chats this is the original date).\n"

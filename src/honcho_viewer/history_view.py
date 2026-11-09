@@ -6,8 +6,7 @@ A reader only: it shows the events the viewer received and any log files you ope
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timezone
 
 from PySide6.QtCore import QDateTime, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor

@@ -5,8 +5,6 @@ Fed by the telemetry listener (what Honcho is doing) and, optionally, by polling
 """
 from __future__ import annotations
 
-import time
-
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel,

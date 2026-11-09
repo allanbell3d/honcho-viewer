@@ -390,6 +390,7 @@ class WorkspaceMixin:
     def _make_workspace_combo(self) -> QComboBox:
         self.ws_combo = tip(QComboBox(), "The workspace whose peers you want to compare.")
         self.ws_combo.currentIndexChanged.connect(self._on_workspace)
+        self.ctx.peer_filter_changed.connect(self._on_workspace)
         return self.ws_combo
 
     def _clear_peers(self) -> None:
@@ -414,16 +415,12 @@ class WorkspaceMixin:
         if ws in self.ctx.peers_cache:
             self._show_peers(ws, self.ctx.peers_cache[ws])
             return
-        self.ctx.call(lambda c: [p["id"] for p in c.list_peers(ws)],
-                      lambda ids: self._cache_then_show(ws, ids), self.latest.ticket("peers"))
-
-    def _cache_then_show(self, ws: str, ids: list[str]) -> None:
-        self.ctx.peers_cache[ws] = ids
-        self._show_peers(ws, ids)
+        self.ctx.call(lambda c: c.list_peers(ws),
+                      lambda peers: self._show_peers(ws, self.ctx.note_peers(ws, peers)), self.latest.ticket("peers"))
 
     def _show_peers(self, ws: str, ids: list[str]) -> None:
         if ws == self.ws_combo.currentData():  # ignore a late reply for a workspace we already left
-            self._fill_peers(sorted(ids))
+            self._fill_peers(sorted(self.ctx.visible_peers(ws, ids)))
 
     def _relabel_workspaces(self) -> None:
         self.ws_combo.blockSignals(True)

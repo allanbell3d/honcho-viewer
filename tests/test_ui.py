@@ -38,6 +38,46 @@ def on_alice(window):
     return window
 
 
+def test_peers_with_reasoning_off_are_hidden_everywhere(on_alice):
+    window = on_alice
+    peers = [{"id": "alice", "configuration": {}}, {"id": "agent", "configuration": {}},
+             {"id": "tenant", "configuration": {"observe_me": False}}]
+    window._show_peers("test-qwen", peers)
+    _select(window.peer_list, "alice")
+    about = window.peer_view.conclusions.about_combo
+
+    def hidden():
+        return [window.peer_list.item(i).text() for i in range(window.peer_list.count())
+                if window.peer_list.item(i).isHidden()]
+
+    def choices():
+        return [about.itemText(i) for i in range(about.count())]
+
+    window.hide_off.setChecked(False)
+    window.hide_off.setChecked(True)
+    assert hidden() == ["tenant"]
+    assert "1 hidden" in window.hide_off.text()
+    assert "tenant" not in choices()
+    assert window.ctx.visible_peers("test-qwen", ["alice", "tenant"]) == ["alice"]
+    window.hide_off.setChecked(False)
+    assert hidden() == []
+    assert "tenant" in choices()
+
+
+def test_hiding_the_open_peer_closes_it(on_alice):
+    window = on_alice
+    window._show_peers("test-qwen", [{"id": "alice", "configuration": {}},
+                                     {"id": "tenant", "configuration": {"observe_me": False}}])
+    window.hide_off.setChecked(False)
+    _select(window.peer_list, "tenant")
+    assert "tenant" in window.peer_view.header.text()
+
+    window.hide_off.setChecked(True)
+
+    assert window.peer_list.currentItem() is None
+    assert "tenant" not in window.peer_view.header.text()
+
+
 def test_saved_token_auto_connects_and_shows_labels(window):
     assert "qwen3-32b" in window.workspace_list.item(0).text()
     assert "3 workspaces" in window.statusBar().currentMessage()
@@ -259,6 +299,35 @@ def test_snapshot_then_what_changed(on_alice, fake):
     assert "weekend sailor" in tab.detail.toPlainText()
 
 
+def test_messages_tab_filters_sessions_by_name(on_alice):
+    tab = on_alice.peer_view.messages
+    wait_for(lambda: tab.session_list.count() == 2)
+
+    tab.session_filter.setText("s2")
+    visible = [tab.session_list.item(i).data(Qt.UserRole) for i in range(tab.session_list.count())
+               if not tab.session_list.item(i).isHidden()]
+    assert visible == ["s2"]
+
+    tab.session_filter.clear()
+    assert not any(tab.session_list.item(i).isHidden() for i in range(tab.session_list.count()))
+
+
+def test_messages_tab_searches_and_returns_to_the_session(on_alice):
+    tab = on_alice.peer_view.messages
+    wait_for(lambda: tab.session_list.count() == 2)
+    _select(tab.session_list, "s2")
+    wait_for(lambda: "filler message 49" in tab.view.toPlainText())
+
+    tab.search_box.setText("filler")
+    tab.search_box.returnPressed.emit()
+    wait_for(lambda: "found" in tab.count_label.text())
+    assert not tab.more_btn.isEnabled()
+
+    tab.search_box.clear()
+    wait_for(lambda: "of" in tab.count_label.text())
+    assert "filler message 49" in tab.view.toPlainText()
+
+
 def test_messages_tab_loads_more_pages(on_alice):
     tab = on_alice.peer_view.messages
     wait_for(lambda: tab.session_list.count() == 2)
@@ -287,7 +356,9 @@ def test_messages_tab_load_all_fetches_the_whole_conversation(on_alice):
 def test_sessions_sort_newest_oldest_and_last_activity(on_alice, tmp_path):
     tab = on_alice.peer_view.messages
     wait_for(lambda: tab.session_list.count() == 2)
-    ids = lambda: [tab.session_list.item(i).data(Qt.UserRole) for i in range(tab.session_list.count())]
+    def ids():
+        return [tab.session_list.item(i).data(Qt.UserRole) for i in range(tab.session_list.count())]
+
     assert ids() == ["s2", "s1"]  # newest first: s2 was created after s1
 
     tab.sort_combo.setCurrentIndex(tab.sort_combo.findData("oldest"))
@@ -1190,8 +1261,6 @@ def _history_events():
 
 
 def _open_history(window, events=None, folder=None):
-    import json
-
     from tests.test_history import wrap
 
     tab = window.history

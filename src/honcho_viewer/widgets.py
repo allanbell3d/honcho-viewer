@@ -28,13 +28,34 @@ def friendly_error(exc: Exception) -> str:
 class AppContext(QObject):
     status = Signal(str)
     labels_changed = Signal()
+    peer_filter_changed = Signal()
 
     def __init__(self, store: LocalStore):
         super().__init__()
         self.store = store
         self.client: HonchoClient | None = None
         self.peers_cache: dict[str, list[str]] = {}
+        self.reasoning_off: dict[str, set[str]] = {}  # per workspace: peers with observe_me off
+        self.hide_reasoning_off = bool(store.ui_value("hide_reasoning_off", True))
         self.telemetry = TelemetryHub(store)
+
+    def note_peers(self, ws: str, peers: list[dict]) -> list[str]:
+        """Cache a workspace's peer ids and which have reasoning off; return the ids."""
+        self.peers_cache[ws] = [p["id"] for p in peers]
+        self.reasoning_off[ws] = {p["id"] for p in peers if (p.get("configuration") or {}).get("observe_me") is False}
+        return self.peers_cache[ws]
+
+    def visible_peers(self, ws: str, ids: list[str]) -> list[str]:
+        """The ids every peer list and picker shows: all, or without reasoning-off peers when that switch is on."""
+        if not self.hide_reasoning_off:
+            return list(ids)
+        hidden = self.reasoning_off.get(ws, set())
+        return [i for i in ids if i not in hidden]
+
+    def set_hide_reasoning_off(self, on: bool) -> None:
+        self.hide_reasoning_off = on
+        self.store.set_ui_value("hide_reasoning_off", on)
+        self.peer_filter_changed.emit()
 
     def call(self, fn: Callable[[HonchoClient], Any], on_done: Callable[[Any], None],
              is_current: Callable[[], bool] = lambda: True,
