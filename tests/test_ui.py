@@ -78,6 +78,44 @@ def test_hiding_the_open_peer_closes_it(on_alice):
     assert "tenant" not in window.peer_view.header.text()
 
 
+def test_peer_filter_sort_and_hide_by_hand(on_alice):
+    window = on_alice
+    window._show_peers("test-qwen", [{"id": "bob", "configuration": {}}, {"id": "alice", "configuration": {}},
+                                     {"id": "carol", "configuration": {}}])
+    _select(window.peer_list, "alice")
+
+    def visible():
+        return [window.peer_list.item(i).text() for i in range(window.peer_list.count())
+                if not window.peer_list.item(i).isHidden()]
+
+    window.peer_sort.setCurrentIndex(1)
+    assert visible() == ["alice", "bob", "carol"]
+    assert window.peer_list.currentItem().text() == "alice"  # sorting keeps the open peer
+    window.peer_filter.setText("CA")
+    assert visible() == ["carol"]
+    assert window.peer_list.currentItem() is None  # the open peer was filtered out: closed
+    window.peer_filter.clear()
+
+    window.peer_list.clearSelection()
+    window.peer_list.item(1).setSelected(True)  # bob
+    window._hide_selected(True)
+    assert visible() == ["alice", "carol"]
+    assert window.store.ui_value("hidden_peers") == {"test-qwen": ["bob"]}
+    window.show_hidden.setChecked(True)
+    assert visible() == ["alice", "bob", "carol"]
+
+
+def test_copy_puts_selected_cells_on_the_clipboard(window):
+    from PySide6.QtGui import QGuiApplication
+
+    window.peer_list.clear()
+    for name in ("alice", "bob"):
+        window.peer_list.addItem(name)
+    window.peer_list.selectAll()
+    window.peer_list.actions()[0].trigger()
+    assert QGuiApplication.clipboard().text() == "alice\nbob"
+
+
 def test_saved_token_auto_connects_and_shows_labels(window):
     assert "qwen3-32b" in window.workspace_list.item(0).text()
     assert "3 workspaces" in window.statusBar().currentMessage()

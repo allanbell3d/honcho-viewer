@@ -17,7 +17,9 @@ from .ask import build_chat_body
 from .async_call import Latest
 from .client import CONCLUSION_LEVELS, REASONING_LEVELS, REPRESENTATION_MAX, HonchoError
 from .store import diff_conclusions
-from .widgets import AppContext, HtmlView, hint, set_combo_items, tip
+from .widgets import AppContext, HtmlView, copyable, hint, set_combo_items, tip
+
+MORE_STEP = 500  # conclusions added per "Show more" click (a multiple of the client's PAGE_SIZE)
 
 
 def _group(title: str, widget: QWidget, tooltip: str = "") -> QGroupBox:
@@ -62,6 +64,8 @@ class OverviewTab(_PeerTab):
         self.about_combo.currentIndexChanged.connect(self.load)
         refresh = QPushButton("Refresh")
         refresh.clicked.connect(self.load)
+        self.more_btn = tip(QPushButton(f"Show {MORE_STEP} more"), "Adds the next older conclusions below, as plain text.")
+        self.more_btn.clicked.connect(self._more)
         self.card_view = HtmlView()
         self.rep_view = HtmlView()
         self.rep_note = tip(QLabel(), f"Honcho never returns the whole memory here: at most {REPRESENTATION_MAX} "
@@ -71,6 +75,7 @@ class OverviewTab(_PeerTab):
         top.addWidget(QLabel("About:"))
         top.addWidget(self.about_combo)
         top.addWidget(self.rep_note, 1)
+        top.addWidget(self.more_btn)
         top.addWidget(refresh)
         split = QSplitter(Qt.Horizontal)
         split.addWidget(_group("Peer card", self.card_view,
@@ -98,6 +103,8 @@ class OverviewTab(_PeerTab):
             return
         ws, peer, target = self.ws, self.peer, self.about_combo.currentData()
         ok = self.latest.ticket()
+        self._shown = REPRESENTATION_MAX
+        self.more_btn.setEnabled(True)
         self.card_view.setHtml(render.placeholder("Loading…"))
         self.rep_view.setHtml(render.placeholder("Loading…"))
         self.rep_note.setText("")
@@ -108,6 +115,22 @@ class OverviewTab(_PeerTab):
         self.ctx.call(lambda c: c.count_conclusions(ws, observer=peer, observed=target or peer),
                       lambda n: self.rep_note.setText(f"Showing up to {REPRESENTATION_MAX} of {n:,} conclusions "
                                                       "(newest first) · all of them are in the Conclusions tab"), ok)
+
+
+    def _more(self) -> None:
+        """Append the next MORE_STEP conclusions (newest first after those shown) as dated lines."""
+        ws, peer, target, skip = self.ws, self.peer, self.about_combo.currentData() or self.peer, self._shown
+        self.more_btn.setEnabled(False)
+        ok = self.latest.ticket()
+
+        def show(items: list[dict]) -> None:
+            self._shown += MORE_STEP
+            self.more_btn.setEnabled(len(items) == MORE_STEP)
+            lines = [f"[{str(c.get('created_at', ''))[:19].replace('T', ' ')}] {c.get('content', '')}" for c in items]
+            cursor = self.rep_view.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            cursor.insertText(f"\n\n## Conclusions {skip + 1:,}–{skip + len(items):,}\n\n" + "\n".join(lines))
+        self.ctx.call(lambda c: c.conclusions_after(ws, peer, target, skip, MORE_STEP), show, ok)
 
 
 # ---- Conclusions ------------------------------------------------------------
@@ -153,6 +176,7 @@ class ConclusionsTab(_PeerTab):
         self._rows_timer = QTimer(self, singleShot=True, interval=150)  # re-measure wrapped rows after a resize
         self._rows_timer.timeout.connect(self._fit_rows)
         self.table = QTableWidget(0, len(COLUMNS))
+        copyable(self.table)
         self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -606,6 +630,7 @@ class MessagesTab(_PeerTab):
         self.sort_combo.currentIndexChanged.connect(self._sort_changed)
         self.session_list = tip(QListWidget(), "Sessions (conversations) this peer took part in.")
         self.session_list.currentItemChanged.connect(self._open_session)
+        copyable(self.session_list)
         self.session_filter = tip(QLineEdit(), explain.SESSION_FILTER)
         self.session_filter.setPlaceholderText("Filter sessions")
         self.session_filter.setClearButtonEnabled(True)

@@ -22,9 +22,21 @@ KIND_TITLES = {"extraction": "extraction", "dream": "dream", "question": "questi
                "maintenance": "maintenance", "rerank": "rerank", "call": "model call", "other": "event"}
 _RERANK_CATEGORY = {"dream": "dream", "dialectic": "dialectic", "prefetch": "dialectic"}  # caller -> run category
 NO_WORKSPACE = "(no workspace)"
-SKIP_TYPES = ("trace.content",)  # prompt/answer text: most of the bytes, not needed for the timeline
+TRACE_TEXT = "trace.content"  # prompt, tool result or answer text, shared by the calls that reference it
+SKIP_ROLES = ("__tool_schema__",)  # tool definitions: the same on every call, not worth keeping
 _DROP_FIELDS = {"client", "honcho_version", "output_signatures", "input_message_refs", "output_tool_calls",
                 "system_prompt_refs", "queue_item_ids", "source_message_ids", "observers"}
+
+
+def _trace_refs(data: dict, stamp: float) -> dict:
+    """What a llm.call.traced event points at; the text itself comes in trace.content events."""
+    refs = data.get("input_message_refs")
+    return {"t": stamp, "step": _n(data.get("step_seq")), "model": data.get("model") or "",
+            "purpose": data.get("call_purpose") or "", "finish": data.get("finish_reason") or "",
+            "system": data.get("system_prompt_ref"), "inputs": refs if isinstance(refs, list) else [],
+            "output": data.get("output_content_ref"),
+            "thinking": data.get("output_thinking_ref") or data.get("output_reasoning_ref"),
+            "tool_calls": data.get("output_tool_calls") if isinstance(data.get("output_tool_calls"), list) else []}
 
 
 def parse_time(text) -> float | None:
@@ -92,8 +104,6 @@ def _parse_line(line: str) -> tuple[list[dict], bool]:
     line = line.strip()
     if not line:
         return [], False
-    if any(f'"{t}"' in line[:400] for t in SKIP_TYPES):
-        return [], False
     try:
         return extract_events(json.loads(line)), False
     except ValueError:
@@ -134,6 +144,7 @@ class Job:
     failed_event: bool = False
     info: dict = field(default_factory=dict)
     steps: list[dict] = field(default_factory=list)
+    traces: list[dict] = field(default_factory=list)  # traced model calls: references to their text
 
     @property
     def tokens_in(self) -> int:
@@ -168,6 +179,7 @@ class HistoryState:
     def __init__(self):
         self._lock = threading.RLock()
         self.jobs: dict[str, Job] = {}
+        self.texts: dict[str, dict] = {}  # content hash -> trace.content (role, text, tool call id)
         self._seen: set[str] = set()
         self._by_message: dict[tuple[str, str], str] = {}  # (workspace, message id) -> extraction job key
         self._by_summary: dict[tuple[str, int], str] = {}  # (workspace, input tokens) -> summary job key
@@ -188,7 +200,11 @@ class HistoryState:
                     if event_id in self._seen:
                         continue
                     self._seen.add(event_id)
-                if event.get("type") in SKIP_TYPES:
+                if event.get("type") == TRACE_TEXT:
+                    data = event.get("data") or {}
+                    if isinstance(data, dict) and data.get("content_hash") and data.get("role") not in SKIP_ROLES:
+                        self.texts[data["content_hash"]] = {k: data.get(k) for k in
+                                                            ("role", "content", "tool_call_id", "tool_calls")}
                     continue
                 self._add(event)
                 added += 1
@@ -262,6 +278,8 @@ class HistoryState:
                         "extraction" if category == "representation" else
                         "summary" if category == "summary" else "call")
             job = self._job(f"run:{run_id}", job_kind)
+            if kind == "llm.call.traced":
+                job.traces.append(_trace_refs(data, stamp))
             if kind.endswith(".traced"):  # same numbers as its *.completed twin; only who and where are new
                 job.workspace = data.get("workspace_name") or job.workspace
                 job.peer = job.peer or data.get("peer_name") or data.get("observed") or ""
@@ -319,6 +337,7 @@ class HistoryState:
             if key.startswith("trace:"):
                 self._by_summary[(ws, tokens)] = key
         job = self._job(key, job_kind)
+        job.traces.append(_trace_refs(data, stamp))
         self._apply(job, "llm.call.completed", data, stamp)
         if job_kind == "extraction":
             for message_id in data.get("source_message_ids") or []:
@@ -488,6 +507,19 @@ class HistoryState:
         job.steps.append(step)
 
     # ---- queries
+    def call_traces(self, job: Job) -> list[dict]:
+        """The job's traced model calls in order, with their text: system prompt, input messages, tool calls
+        asked for, answer and thinking. Text not (yet) read shows as None."""
+        with self._lock:
+            def text(ref):
+                return self.texts.get(ref) if ref else None
+
+            calls = []
+            for ref in sorted(job.traces, key=lambda r: (r["t"], r["step"])):
+                calls.append({**ref, "system": text(ref["system"]), "inputs": [(r, text(r)) for r in ref["inputs"]],
+                              "output": text(ref["output"]), "thinking": text(ref["thinking"])})
+            return calls
+
     def workspaces(self) -> list[str]:
         with self._lock:
             self._flush_completed()

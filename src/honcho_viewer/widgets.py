@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QSplitter, QTextBrowser,
                                QToolButton, QVBoxLayout, QWidget)
 
@@ -102,6 +103,7 @@ class HtmlView(QTextBrowser):
     def __init__(self, html: str = ""):
         super().__init__()
         self.setOpenLinks(False)
+        self.setTextInteractionFlags(Qt.TextBrowserInteraction | Qt.TextSelectableByKeyboard)
         if html:
             self.setHtml(html)
 
@@ -127,6 +129,22 @@ def hint(text: str) -> QLabel:
     label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)  # never soak up spare height
     label.setStyleSheet("color: palette(mid); font-style: italic; padding: 2px 0 6px 0;")
     return label
+
+
+def copyable(table) -> None:
+    """Ctrl+C or right-click → Copy copies the selected cells of a table or list as tab-separated text."""
+    def copy() -> None:
+        cells = sorted((i.row(), i.column(), i.data() or "") for i in table.selectedIndexes())
+        lines: dict[int, list[str]] = {}
+        for row, _col, text in cells:
+            lines.setdefault(row, []).append(str(text))
+        QGuiApplication.clipboard().setText("\n".join("\t".join(v) for v in lines.values()))
+    action = QAction("Copy", table)
+    action.setShortcut(QKeySequence.Copy)
+    action.setShortcutContext(Qt.WidgetShortcut)
+    action.triggered.connect(copy)
+    table.addAction(action)
+    table.setContextMenuPolicy(Qt.ActionsContextMenu)
 
 
 def tip(widget: QWidget, text: str) -> QWidget:

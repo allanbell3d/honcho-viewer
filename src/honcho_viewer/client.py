@@ -199,6 +199,15 @@ class HonchoClient:
         return self._all_pages("/v3/workspaces/{ws}/conclusions/list", {"ws": ws},
                                {"filters": self._conclusion_filters(observer, observed, level)}, max_items)
 
+    def conclusions_after(self, ws: str, observer: str, observed: str, skip: int, count: int) -> list[dict]:
+        """Conclusions newest first, skipping the first `skip` (skip and count are multiples of PAGE_SIZE)."""
+        filters = self._conclusion_filters(observer, observed, None)
+        items: list = []
+        for page in range(skip // PAGE_SIZE + 1, (skip + count) // PAGE_SIZE + 1):
+            items += self._request("POST", "/v3/workspaces/{ws}/conclusions/list", {"ws": ws},
+                                   {"page": page, "size": PAGE_SIZE}, {"filters": filters}).get("items", [])
+        return items
+
     def stream_conclusions(self, ws: str, observer: str | None, observed: str | None, level: str | None,
                            keep_going: Callable[[], bool]):
         """list_conclusions as a generator of (items, total, pages_done, pages); see _stream_pages.

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- History: a job's detail ends with its **Trace**, every traced model call in order: system prompt, messages and
+  tool results sent, tools asked for, thinking and answer. The text comes from Honcho's `trace.content` events,
+  which are now kept (tool definitions excepted) instead of skipped; a message shown for an earlier call is not
+  repeated. Reading logs with traces uses more memory.
+- **Copy**: Ctrl+C or right-click → Copy copies the selected cells or rows (tab-separated) in the History, Monitor
+  and Conclusions tables and the peer and session lists. Text in the reading panes can be selected with the keyboard.
+- Peers: a name filter, a sort order (as listed by Honcho, A-Z, Z-A, remembered) and hiding peers by hand (select
+  several, right-click → Hide / Unhide; saved per workspace on this PC) with **Show hidden**. The filters only change
+  the list, nothing is fetched; if the open peer is filtered out or hidden, it is closed.
+- Overview: **Show 500 more** adds the next older conclusions below the representation as dated lines.
+
 ## 0.1.9 (2026-11-10)
 
 - Messages tab: **Filter sessions** narrows the session list to sessions whose name or details (metadata,

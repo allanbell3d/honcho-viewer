@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHBoxLay
 from . import explain, render
 from .monitor import NO_WORKSPACE, MonitorState
 from .telemetry_panel import TelemetryPanel
-from .widgets import AppContext, HtmlView, hint, tip
+from .widgets import AppContext, HtmlView, copyable, hint, tip
 
 COLUMNS = (
     ("Workspace", "A workspace that has sent events, or one you chose to watch."),
@@ -144,6 +144,7 @@ class MonitorView(QWidget):
         self._pinned: set[str] = set()
 
         self.table = QTableWidget(0, len(COLUMNS))
+        copyable(self.table)
         self.table.setHorizontalHeaderLabels([name for name, _ in COLUMNS])
         for i, (_, why) in enumerate(COLUMNS):
             self.table.horizontalHeaderItem(i).setToolTip(why)
