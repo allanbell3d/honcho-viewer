@@ -12,6 +12,13 @@
   several, right-click → Hide / Unhide; saved per workspace on this PC) with **Show hidden**. The filters only change
   the list, nothing is fetched; if the open peer is filtered out or hidden, it is closed.
 - Overview: **Show 500 more** adds the next older conclusions below the representation as dated lines.
+- New **Scopes** tab (read-only): a workspace's scopes with their session counts; pick one for its member sessions,
+  their backfill state and, per session, each peer's *observes me* / *observes others* (with the peer's own setting
+  when the session leaves it unset). **Peer** narrows the list to scopes holding that peer's sessions. Peers are read
+  for the first 50 sessions, **Show all sessions** reads the rest. Honcho does not list the keys it issued, so who
+  holds a key is not shown. A server without scopes (before Honcho 3.5) says so.
+- The app has its own icon (`src/honcho_viewer/icon.svg`), and on Windows its own taskbar button, instead of the
+  Python icon shared with every other Python app.
 
 ## 0.1.9 (2026-11-10)
 

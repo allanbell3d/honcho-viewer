@@ -2,6 +2,7 @@ import os
 import sys
 from pathlib import Path
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .main_window import MainWindow
@@ -21,8 +22,12 @@ def data_dir() -> Path:
 
 
 def main() -> int:
+    if sys.platform == "win32":  # own taskbar button and icon instead of grouping under python(w).exe
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("HonchoViewer")
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("Honcho Viewer")
+    app.setWindowIcon(QIcon(str(Path(__file__).with_name("icon.svg"))))
     window = MainWindow(LocalStore(data_dir()))
     window.show()
     return app.exec()

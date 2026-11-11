@@ -1405,3 +1405,26 @@ def test_history_open_folder_reads_it_and_remembers_it(window, tmp_path, monkeyp
 
     assert str(other) in window.store.ui_value("history_sources")
     assert "archive-ws" in tab.history.workspaces()
+
+
+def test_scopes_tab_lists_scopes_and_who_is_observed(window):
+    view = window.scopes
+    view.ws_combo.setCurrentIndex(view.ws_combo.findData("test-qwen"))
+    wait_for(lambda: view.scope_list.count() == 1)
+    assert view.scope_list.item(0).text() == "support  ·  1 sessions"
+
+    view.scope_list.setCurrentRow(0)
+    wait_for(lambda: "Backfill" in view.detail.toPlainText())
+    text = view.detail.toPlainText()
+    assert "completed · 4 copied" in text and "alice" in text and "agent" in text
+    assert "off" in text  # the agent is not observed in s1
+
+    view.peer_combo.setCurrentIndex(view.peer_combo.findData("alice"))
+    wait_for(lambda: "with alice" in (view.scope_list.item(0).text() if view.scope_list.count() else ""))
+
+
+def test_scopes_tab_says_when_the_server_has_no_scopes(window):
+    view = window.scopes
+    view.ws_combo.setCurrentIndex(view.ws_combo.findData("test-llama"))
+    wait_for(lambda: "no scopes" in view.detail.toPlainText())
+    assert view.scope_list.count() == 0

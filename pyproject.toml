@@ -36,5 +36,8 @@ version = { attr = "honcho_viewer.__version__" }  # resolved from src/
 where = ["src"]
 include = ["honcho_viewer*"]
 
+[tool.setuptools.package-data]
+honcho_viewer = ["icon.svg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

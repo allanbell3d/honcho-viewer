@@ -17,6 +17,7 @@ from .compare_view import CompareView
 from .history_view import HistoryView
 from .monitor_view import MonitorView
 from .peer_view import PeerView
+from .scopes_view import ScopesView
 from .store import LocalStore
 from .widgets import AppContext, copyable, tip
 
@@ -118,6 +119,7 @@ class MainWindow(QMainWindow):
         self.compare_reasoning = CompareReasoningView(self.ctx)
         self.monitor = MonitorView(self.ctx)
         self.history = HistoryView(self.ctx)
+        self.scopes = ScopesView(self.ctx)
         self.tabs = QTabWidget()
         self.tabs.addTab(explore, "Explore")
         self.tabs.addTab(self.compare, "Compare models")
@@ -125,6 +127,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.compare_reasoning, "Compare reasoning")
         self.tabs.addTab(self.monitor, "Monitor")
         self.tabs.addTab(self.history, "History")
+        self.tabs.addTab(self.scopes, "Scopes")
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -177,6 +180,7 @@ class MainWindow(QMainWindow):
         self.compare_peers.set_workspaces(list(self._workspaces))
         self.compare_reasoning.set_workspaces(list(self._workspaces))
         self.monitor.set_workspaces(list(self._workspaces))
+        self.scopes.set_workspaces(list(self._workspaces))
         self.statusBar().showMessage(f"Connected to {url} · {len(rows)} workspaces")
 
     # ---- selection
