@@ -88,6 +88,10 @@ def build_workspace(ws_id: str, model: str, n_conclusions: int = 6) -> dict:
             "s2": {"peers": ["alice"], "messages": messages["s2"]},
         },
         "conclusions": conclusions,
+        # One scope over s1; the agent observes others there but nobody writes conclusions about it.
+        "scopes": {"support": {"sessions": ["s1"], "created_at": _ts(2),
+                               "status": {"s1": {"state": "completed", "updated_at": _ts(3), "docs_copied": 4}}}},
+        "peer_configs": {("s1", "agent"): {"observe_me": False, "observe_others": True}},
     }
 
 
@@ -98,6 +102,7 @@ class FakeHoncho:
             "test-llama": build_workspace("test-llama", "llama3-70b"),
             "big": build_workspace("big", "bulk", n_conclusions=130),
         }
+        del self.workspaces["test-llama"]["scopes"]  # as on a Honcho from before scopes: the routes answer 404
         self.requests: list[dict] = []
         self.unexpected: list[tuple[str, str]] = []
         self._server: ThreadingHTTPServer | None = None
@@ -131,7 +136,26 @@ class FakeHoncho:
             ws = self.workspaces.get(seg[2])
             if ws is None:
                 return 404, {"detail": f"Workspace {seg[2]} not found"}
+        if len(seg) > 3 and seg[3] == "scopes" and "scopes" not in ws:
+            return 404, {"detail": "Not Found"}
         match (method, seg):
+            case ("POST", ["v3", "workspaces", _, "scopes", "list"]):
+                rows = [{"id": name, "metadata": {}, "created_at": s["created_at"],
+                         "session_count": len(s["sessions"]) if query.get("include_session_count") == "true" else None}
+                        for name, s in ws["scopes"].items()]
+                return self._page(rows, query)
+            case ("POST", ["v3", "workspaces", _, "scopes", scope, "sessions", "list"]):
+                if scope not in ws["scopes"]:
+                    return 404, {"detail": f"Scope {scope} not found"}
+                rows = [{"id": sid, "is_active": True, "workspace_id": seg[2], "metadata": {}, "configuration": {},
+                         "created_at": _ts(0)} for sid in ws["scopes"][scope]["sessions"]]
+                return self._page(rows, query)
+            case ("GET", ["v3", "workspaces", _, "scopes", scope, "status"]):
+                return 200, {"backfill_status": ws["scopes"][scope]["status"]}
+            case ("GET", ["v3", "workspaces", _, "sessions", sid, "peers"]):
+                return self._page([p for p in ws["peers"] if p["id"] in ws["sessions"][sid]["peers"]], query)
+            case ("GET", ["v3", "workspaces", _, "sessions", sid, "peers", peer, "config"]):
+                return 200, ws["peer_configs"].get((sid, peer), {"observe_me": None, "observe_others": None})
             case ("POST", ["v3", "workspaces", "list"]):
                 return self._page([w["workspace"] for w in self.workspaces.values()], query)
             case ("POST", ["v3", "workspaces", _, "peers", "list"]):

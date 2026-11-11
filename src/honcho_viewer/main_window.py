@@ -4,8 +4,9 @@ from __future__ import annotations
 import json
 
 from PySide6.QtCore import QByteArray, Qt, QTimer
-from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMainWindow, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget)
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMainWindow, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget)
 
 from . import __version__, render
 from .async_call import Latest
@@ -16,9 +17,11 @@ from .compare_view import CompareView
 from .history_view import HistoryView
 from .monitor_view import MonitorView
 from .peer_view import PeerView
+from .scopes_view import ScopesView
 from .store import LocalStore
-from .widgets import AppContext, tip
+from .widgets import AppContext, copyable, tip
 
+PEER_SORTS = ("As listed by Honcho", "Name A-Z", "Name Z-A")
 QUEUE_TIP = ("Honcho processes new messages in the background (conclusions, summaries, dreams). "
              "While work is waiting, what you see may be incomplete: wait for 'idle' before comparing models.")
 
@@ -70,6 +73,24 @@ class MainWindow(QMainWindow):
         self.hide_off.setChecked(self.ctx.hide_reasoning_off)
         self.hide_off.toggled.connect(self.ctx.set_hide_reasoning_off)
         self.ctx.peer_filter_changed.connect(self._apply_hide_off)
+        self.peer_filter = tip(QLineEdit(placeholderText="Filter peers…"),
+                               "Shows only peers whose name contains this text.")
+        self.peer_filter.setClearButtonEnabled(True)
+        self.peer_filter.textChanged.connect(self._show_rows)
+        self.peer_sort = tip(QComboBox(), "Order of the peer list.")
+        self.peer_sort.addItems(PEER_SORTS)
+        self.peer_sort.setCurrentIndex(int(store.ui_value("peer_sort", 0) or 0) % len(PEER_SORTS))
+        self.peer_sort.currentIndexChanged.connect(lambda mode: (store.set_ui_value("peer_sort", mode),
+                                                                 self._sort_peers()))
+        self.show_hidden = tip(QCheckBox("Show hidden"),
+                               "Shows the peers you hid (select peers, right-click → Hide). Saved on this PC only.")
+        self.show_hidden.toggled.connect(self._show_rows)
+        self.peer_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        copyable(self.peer_list)
+        for text, hide in (("Hide selected peers", True), ("Unhide selected peers", False)):
+            action = QAction(text, self.peer_list)
+            action.triggered.connect(lambda _checked=False, hide=hide: self._hide_selected(hide))
+            self.peer_list.addAction(action)
         self.peer_view = PeerView(self.ctx)
 
         left = QWidget()
@@ -82,6 +103,11 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.ws_info)
         left_layout.addWidget(QLabel("<b>Peers</b>"))
         left_layout.addWidget(self.hide_off)
+        left_layout.addWidget(self.peer_filter)
+        sort_row = QHBoxLayout()
+        sort_row.addWidget(self.peer_sort, 1)
+        sort_row.addWidget(self.show_hidden)
+        left_layout.addLayout(sort_row)
         left_layout.addWidget(self.peer_list, 3)
         explore = QSplitter(Qt.Horizontal)
         explore.addWidget(left)
@@ -93,6 +119,7 @@ class MainWindow(QMainWindow):
         self.compare_reasoning = CompareReasoningView(self.ctx)
         self.monitor = MonitorView(self.ctx)
         self.history = HistoryView(self.ctx)
+        self.scopes = ScopesView(self.ctx)
         self.tabs = QTabWidget()
         self.tabs.addTab(explore, "Explore")
         self.tabs.addTab(self.compare, "Compare models")
@@ -100,6 +127,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.compare_reasoning, "Compare reasoning")
         self.tabs.addTab(self.monitor, "Monitor")
         self.tabs.addTab(self.history, "History")
+        self.tabs.addTab(self.scopes, "Scopes")
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -152,6 +180,7 @@ class MainWindow(QMainWindow):
         self.compare_peers.set_workspaces(list(self._workspaces))
         self.compare_reasoning.set_workspaces(list(self._workspaces))
         self.monitor.set_workspaces(list(self._workspaces))
+        self.scopes.set_workspaces(list(self._workspaces))
         self.statusBar().showMessage(f"Connected to {url} · {len(rows)} workspaces")
 
     # ---- selection
@@ -180,25 +209,67 @@ class MainWindow(QMainWindow):
                                        indent=2, ensure_ascii=False))
             self.peer_list.addItem(item)
         self.peer_list.blockSignals(False)
-        self._apply_hide_off()
+        self._sort_peers()
 
-    def _apply_hide_off(self) -> None:
-        """Hide reasoning-off peers in this list; close the open peer if it is now hidden, else refresh its pickers."""
-        ws_item = self.workspace_list.currentItem()
-        ws = ws_item.data(Qt.UserRole) if ws_item else None
+    def _ws(self) -> str | None:
+        item = self.workspace_list.currentItem()
+        return item.data(Qt.UserRole) if item else None
+
+    def _hidden(self, ws: str | None) -> set[str]:
+        """Peers hidden by hand in this workspace (saved on this PC)."""
+        return set((self.store.ui_value("hidden_peers", {}) or {}).get(ws or "", []))
+
+    def _hide_selected(self, hide: bool) -> None:
+        ws = self._ws()
+        if ws is None:
+            return
+        names = {i.data(Qt.UserRole) for i in self.peer_list.selectedItems() if not i.isHidden()}
+        saved = dict(self.store.ui_value("hidden_peers", {}) or {})
+        saved[ws] = sorted(self._hidden(ws) | names if hide else self._hidden(ws) - names)
+        self.store.set_ui_value("hidden_peers", saved)
+        self._show_rows()
+
+    def _sort_peers(self) -> None:
+        """Order the peer list (Honcho's order or by name) and keep the open peer selected."""
+        mode = self.peer_sort.currentIndex()
+        order = list(self.ctx.peers_cache.get(self._ws(), []))
+        if mode:
+            order.sort(key=str.lower, reverse=mode == 2)
+        rank = {name: i for i, name in enumerate(order)}
+        current = self.peer_list.currentItem()
+        current_name = current.data(Qt.UserRole) if current else None
+        self.peer_list.blockSignals(True)
+        items = [self.peer_list.takeItem(0) for _ in range(self.peer_list.count())]
+        for item in sorted(items, key=lambda i: rank.get(i.data(Qt.UserRole), len(rank))):
+            self.peer_list.addItem(item)
+            if item.data(Qt.UserRole) == current_name:
+                self.peer_list.setCurrentItem(item)
+        self.peer_list.blockSignals(False)
+        self._show_rows()
+
+    def _show_rows(self) -> None:
+        """Show or hide list rows (reasoning off, name filter, hidden by hand); close the open peer if it is hidden.
+        Touches the list only: nothing is fetched."""
+        ws = self._ws()
         shown = set(self.ctx.visible_peers(ws, self.ctx.peers_cache.get(ws, []))) if ws else set()
+        text = self.peer_filter.text().strip().lower()
+        by_hand = set() if self.show_hidden.isChecked() else self._hidden(ws)
         for i in range(self.peer_list.count()):
             item = self.peer_list.item(i)
-            item.setHidden(item.data(Qt.UserRole) not in shown)
+            name = item.data(Qt.UserRole)
+            item.setHidden(name not in shown or text not in name.lower() or name in by_hand)
         hidden = self.peer_list.count() - len(shown)
         self.hide_off.setText("Hide peers with reasoning off" + (f" ({hidden} hidden)" if hidden > 0 else ""))
         current = self.peer_list.currentItem()
-        if current is None or not self.ctx.reasoning_off.get(ws):
-            return  # nothing open, or no reasoning-off peers: the open peer's pickers are already right
-        if current.isHidden():
+        if current is not None and current.isHidden():
             self.peer_list.setCurrentRow(-1)
             self.peer_view.clear()
-        else:
+
+    def _apply_hide_off(self) -> None:
+        """Re-apply the row filters; when reasoning-off peers exist, refresh the open peer's pickers."""
+        self._show_rows()
+        current = self.peer_list.currentItem()
+        if current is not None and self.ctx.reasoning_off.get(self._ws()):
             self._on_peer(current)
 
     def _on_peer(self, current, _previous=None) -> None:

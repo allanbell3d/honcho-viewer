@@ -28,6 +28,11 @@ SAFE_ROUTES = frozenset({
     ("POST", "/v3/workspaces/{ws}/conclusions/list"),
     ("GET", "/v3/workspaces/{ws}/conclusions/{conclusion}"),
     ("POST", "/v3/workspaces/{ws}/search"),
+    ("POST", "/v3/workspaces/{ws}/scopes/list"),
+    ("POST", "/v3/workspaces/{ws}/scopes/{scope}/sessions/list"),
+    ("GET", "/v3/workspaces/{ws}/scopes/{scope}/status"),
+    ("GET", "/v3/workspaces/{ws}/sessions/{session}/peers"),
+    ("GET", "/v3/workspaces/{ws}/sessions/{session}/peers/{peer}/config"),
 })
 REASONING_LEVELS = ("minimal", "low", "medium", "high", "max")
 CONCLUSION_LEVELS = ("explicit", "deductive", "inductive", "contradiction")
@@ -168,6 +173,34 @@ class HonchoClient:
     def peer_sessions(self, ws: str, peer: str) -> list[dict]:
         return self._all_pages("/v3/workspaces/{ws}/peers/{peer}/sessions", {"ws": ws, "peer": peer})
 
+    # ---- scopes and who sees what
+    def list_scopes(self, ws: str) -> list[dict]:
+        """Scopes (named groups of sessions that bound what recall can see), each with its `session_count`."""
+        return self._all_pages("/v3/workspaces/{ws}/scopes/list", {"ws": ws}, query={"include_session_count": True})
+
+    def scope_sessions(self, ws: str, scope: str) -> list[dict]:
+        """A scope's member sessions, longest-standing member first."""
+        return self._all_pages("/v3/workspaces/{ws}/scopes/{scope}/sessions/list", {"ws": ws, "scope": scope})
+
+    def scope_status(self, ws: str, scope: str) -> dict:
+        """Backfill state per member session: {session: {state, updated_at[, docs_copied]}}."""
+        data = self._request("GET", "/v3/workspaces/{ws}/scopes/{scope}/status", {"ws": ws, "scope": scope})
+        return data.get("backfill_status") or {}
+
+    def session_peers(self, ws: str, session: str) -> list[dict]:
+        route, path = "/v3/workspaces/{ws}/sessions/{session}/peers", {"ws": ws, "session": session}
+        items, page, pages = [], 1, 1
+        while page <= pages:
+            data = self._request("GET", route, path, {"page": page, "size": PAGE_SIZE})
+            items += data.get("items", [])
+            pages, page = data.get("pages") or 1, page + 1
+        return items
+
+    def session_peer_config(self, ws: str, session: str, peer: str) -> dict:
+        """observe_me / observe_others for one peer in one session (None = not set here, inherited)."""
+        return self._request("GET", "/v3/workspaces/{ws}/sessions/{session}/peers/{peer}/config",
+                             {"ws": ws, "session": session, "peer": peer}) or {}
+
     def messages_page(self, ws: str, session: str, page: int = 1, size: int = 50, reverse: bool = False) -> dict:
         return self._request("POST", "/v3/workspaces/{ws}/sessions/{session}/messages/list",
                              {"ws": ws, "session": session}, {"page": page, "size": size, "reverse": reverse}, {})
@@ -198,6 +231,15 @@ class HonchoClient:
                          level: str | None = None, max_items: int | None = None) -> list[dict]:
         return self._all_pages("/v3/workspaces/{ws}/conclusions/list", {"ws": ws},
                                {"filters": self._conclusion_filters(observer, observed, level)}, max_items)
+
+    def conclusions_after(self, ws: str, observer: str, observed: str, skip: int, count: int) -> list[dict]:
+        """Conclusions newest first, skipping the first `skip` (skip and count are multiples of PAGE_SIZE)."""
+        filters = self._conclusion_filters(observer, observed, None)
+        items: list = []
+        for page in range(skip // PAGE_SIZE + 1, (skip + count) // PAGE_SIZE + 1):
+            items += self._request("POST", "/v3/workspaces/{ws}/conclusions/list", {"ws": ws},
+                                   {"page": page, "size": PAGE_SIZE}, {"filters": filters}).get("items", [])
+        return items
 
     def stream_conclusions(self, ws: str, observer: str | None, observed: str | None, level: str | None,
                            keep_going: Callable[[], bool]):

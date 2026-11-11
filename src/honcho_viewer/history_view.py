@@ -5,6 +5,7 @@ A reader only: it shows the events the viewer received and any log files you ope
 """
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 
@@ -18,7 +19,7 @@ from . import explain, render
 from .async_call import run_async
 from .history import KIND_TITLES, HistoryState, Job
 from .monitor_view import compact, queue_text
-from .widgets import AppContext, HtmlView, hint, tip
+from .widgets import AppContext, HtmlView, copyable, hint, tip
 
 COLUMNS = (
     ("Time", "When the job finished (your local time)."),
@@ -187,6 +188,7 @@ class HistoryView(QWidget):
         self.source_label.setStyleSheet("color: #666;")
 
         self.table = QTableWidget(0, len(COLUMNS))
+        copyable(self.table)
         self.table.setHorizontalHeaderLabels([name for name, _ in COLUMNS])
         for i, (_, why) in enumerate(COLUMNS):
             self.table.horizontalHeaderItem(i).setToolTip(why)
@@ -596,7 +598,53 @@ class HistoryView(QWidget):
                          f"<br><small style='color:#777'>{fields}</small></td></tr>")
         steps.append("</table>")
         wrote = self._wrote.get(job.key, "")
-        return "".join(head) + wrote + "".join(steps)
+        return "".join(head) + wrote + "".join(steps) + self.trace_html(job)
+
+    def trace_html(self, job: Job) -> str:
+        """The traced model calls of a job: what each call was sent and what it answered. A message already
+        shown for an earlier call of the job is not repeated."""
+        e = render.esc
+        calls = self.history.call_traces(job)
+        if not calls:
+            return ""
+        # Structured answers (extraction, summaries) come as JSON objects, not text.
+        def block(text) -> str:
+            text = text if isinstance(text, str) else json.dumps(text, indent=1, ensure_ascii=False)
+            return "<pre style='white-space:pre-wrap'>" + e(text) + "</pre>"
+
+        out = [f"<p><b>Trace</b> · {len(calls)} traced model call(s): what each call was sent and what it "
+               "answered. Messages shown for an earlier call are not repeated.</p>"]
+        shown: set[str] = set()
+        for number, call in enumerate(calls, 1):
+            out.append(f"<h4>Call {number} · {e(datetime.fromtimestamp(call['t']).strftime('%H:%M:%S'))} · "
+                       f"{e(call['model'])} · {e(call['purpose'])}"
+                       + (f" · finish {e(call['finish'])}" if call["finish"] else "") + "</h4>")
+            if call["system"] and call["system"]["content"] and "system" not in shown:
+                shown.add("system")
+                out.append("<p><b>System prompt</b></p>" + block(call["system"]["content"]))
+            for ref, item in call["inputs"]:
+                if ref in shown:
+                    continue
+                shown.add(ref)
+                if item is None:
+                    out.append(f"<p><i>message {e(ref[:19])}… not in the files read</i></p>")
+                    continue
+                role = item.get("role") or "?"
+                label = ("Tool result" if role == "tool" else "Model (earlier step)" if role == "assistant"
+                         else "System" if role == "system" else "Sent")
+                for request in item.get("tool_calls") or []:
+                    out.append(f"<p><b>Asked for tool</b> {e(str(request.get('name')))} "
+                               f"{e(json.dumps(request.get('input'), ensure_ascii=False))}</p>")
+                if item.get("content"):
+                    out.append(f"<p><b>{label}</b></p>" + block(item["content"]))
+            if call["thinking"] and call["thinking"].get("content"):
+                out.append("<p><b>Thinking</b></p>" + block(call["thinking"]["content"]))
+            for request in call["tool_calls"]:
+                out.append(f"<p><b>Asks for tool</b> {e(str(request.get('name')))} "
+                           f"{e(json.dumps(request.get('input'), ensure_ascii=False))}</p>")
+            if call["output"] and call["output"].get("content"):
+                out.append("<p><b>Answer</b></p>" + block(call["output"]["content"]))
+        return "".join(out)
 
     # ---- what a job wrote (read-only fetch)
     def _fetch_wrote(self) -> None:

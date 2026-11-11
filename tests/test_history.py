@@ -47,7 +47,7 @@ def test_reads_wrapper_lines_plain_events_arrays_and_gzip(tmp_path):
     assert len(h.select(WS)) == 4
 
 
-def test_bad_lines_are_counted_not_fatal_and_trace_content_is_skipped(tmp_path):
+def test_bad_lines_are_counted_not_fatal_and_trace_content_is_not_a_job(tmp_path):
     good = ev("message.created", 1, message_count=2)
     prompt = ev("trace.content", 2, content="a very long prompt")
     (tmp_path / "log.jsonl").write_text(f"{{broken\n{wrap(prompt)}\n{wrap(good)}\n", encoding="utf-8")
@@ -118,6 +118,24 @@ def test_a_question_that_gave_up_is_failed_with_its_error_and_its_peer():
     job = only(h, "question")
     assert job.status == "failed" and job.final_error == "APIStatusError"
     assert (job.errors, job.retries, job.calls, job.peer) == (3, 2, 3, "bob")  # traced twin is not counted again
+
+
+def test_a_traced_question_keeps_what_each_call_was_sent_and_answered():
+    def text(t, ref, role, content):
+        return ev("trace.content", t, content_hash=ref, role=role, content=content)
+
+    h = state(text(1, "h:q", "user", "Where does Bob live?"), text(1, "h:tools", "__tool_schema__", "tool definitions"),
+              ev("llm.call.traced", 2, run_id="q4", step_seq=1, peer_name="alice", call_purpose="dialectic.answer",
+                 model="m1", input_message_refs=["h:q"],
+                 output_tool_calls=[{"id": "c1", "name": "search_messages", "input": {"query": "Bob"}}]),
+              text(3, "h:found", "tool", "Bob lives in Lisbon"), text(4, "h:ans", "assistant", "Lisbon."),
+              ev("llm.call.traced", 4, run_id="q4", step_seq=2, call_purpose="dialectic.answer", model="m1",
+                 input_message_refs=["h:q", "h:found"], output_content_ref="h:ans"),
+              ev("dialectic.completed", 5, run_id="q4", peer_name="alice"))
+    calls = h.call_traces(only(h, "question"))
+    assert [c["tool_calls"][0]["name"] if c["tool_calls"] else None for c in calls] == ["search_messages", None]
+    assert [x["content"] for _, x in calls[1]["inputs"]] == ["Where does Bob live?", "Bob lives in Lisbon"]
+    assert calls[1]["output"]["content"] == "Lisbon." and "h:tools" not in h.texts
 
 
 def test_a_question_that_worked_after_a_failed_attempt_is_retried():
