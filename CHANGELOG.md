@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.10 (2026-11-11)
 
 - History: a job's detail ends with its **Trace**, every traced model call in order: system prompt, messages and
   tool results sent, tools asked for, thinking and answer. The text comes from Honcho's `trace.content` events,
